@@ -8471,7 +8471,107 @@ static void ggml_cuda_mul_mat_mat_batched_cublas(const ggml_tensor * src0, const
     ggml_cuda_pool_free(dst_f16, dst_as);
 }
 
+
+//------------------------------------------------------------------------------
+// Correlation Recorder
+
+#define ENABLE_CORRELATION_RECORDER
+#ifdef ENABLE_CORRELATION_RECORDER
+
+class CorrelationRecorder
+{
+public:
+    void RecordActivations(ggml_tensor* tensor);
+
+protected:
+    struct ThreadContext
+    {
+        std::vector<float> Row;
+    };
+
+    std::vector<std::shared_ptr<ThreadContext>> Contexts;
+};
+
+void CorrelationRecorder::RecordActivations(ggml_tensor* tensor)
+{
+    ggml_type_traits_t qtype;
+    if (ggml_is_quantized(tensor->type)) {
+        qtype = ggml_internal_get_type_traits(tensor->type);
+        if (qtype.to_float == NULL) {
+            throw std::runtime_error(format("RecordActivations: type %s unsupported for integer quantization: no dequantization available", ggml_type_name(tensor->type)));
+        }
+    } else if (tensor->type != GGML_TYPE_F16) {
+        throw std::runtime_error(format("RecordActivations: cannot dequantize/convert tensor type %s", ggml_type_name(tensor->type)));
+    }
+
+    size_t nelements = tensor->ne[0];
+    size_t block_size = tensor->type == GGML_TYPE_F16 ? 1 : (size_t)ggml_blck_size(tensor->type);
+    size_t block_size_bytes = ggml_type_size(tensor->type);
+    GGML_ASSERT(nelements % block_size == 0);
+    size_t nblocks = nelements / block_size;
+
+    size_t nthread = std::thread::hardware_concurrency();
+    size_t n_batch = tensor->ne[1];
+    size_t batch_per_thread = (n_batch + nthread - 1) / nthread;
+
+    std::vector<std::thread> workers;
+
+    Contexts.resize(nthread);
+    for (size_t i = 0; i < nthread; ++i) {
+        if (!Contexts[i]) {
+            Contexts[i] = std::make_shared<ThreadContext>();
+        }
+        if (Contexts[i]->Row.size() != nelements) {
+            Contexts[i]->Row.resize(nelements);
+        }
+    }
+
+    for (size_t thr_start = 0; thr_start < n_batch; thr_start += batch_per_thread)
+    {
+        size_t thr_count = batch_per_thread;
+        if (batch + thr_count > n_batch) {
+            thr_count = n_batch - batch;
+        }
+
+        auto fn = [this, tensor, qtype, nelements](size_t start, size_t count)
+        {
+            float* out_row = ;
+
+            for (size_t i = 0; i < count; ++i) {
+                size_t batch = start + i;
+                uint8_t* in_row = (uint8_t*)tensor->data + tensor->nb[1] * batch;
+
+                if (typ == GGML_TYPE_F16) {
+                    ggml_fp16_to_fp32_row((ggml_fp16_t *)in_row, out_row, nels);
+                } else {
+                    qtype.to_float(in_row, out_row, nels);
+                }
+            }
+        };
+
+        workers.emplace_back(fn, thr_start, thr_count);
+    }
+
+    for (auto & w : workers) { w.join(); }
+}
+
+static CorrelationRecorder m_CorrelationRecorder;
+
+#endif // ENABLE_CORRELATION_RECORDER
+
 static void ggml_cuda_mul_mat(const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
+
+#ifdef ENABLE_CORRELATION_RECORDER
+    if (0 == strcmp(src0->name, "blk.22.ffn_up.weight")) {
+        printf("ggml_cuda_mul_mat src0:t=%d:%s[%d,%d,%d] x src1:t=%d:%s[%d,%d,%d] -> dst:t=%d:%s[%d,%d,%d]\n",
+            (int)src0->type, src0->name, (int)src0->ne[0], (int)src0->ne[1], (int)src0->ne[2],
+            (int)src1->type, src1->name, (int)src1->ne[0], (int)src1->ne[1], (int)src1->ne[2],
+            (int)dst->type, dst->name, (int)dst->ne[0], (int)dst->ne[1], (int)dst->ne[2]);
+
+        m_CorrelationRecorder.Record(dst);
+    }
+#endif // ENABLE_CORRELATION_RECORDER
+
     const bool all_on_device =
         (src0->backend == GGML_BACKEND_GPU || src0->backend == GGML_BACKEND_GPU_SPLIT) &&
         (src1->backend == GGML_BACKEND_GPU) &&
@@ -9194,6 +9294,8 @@ bool ggml_cuda_compute_forward(struct ggml_compute_params * params, struct ggml_
             return false;
         }
     }
+
+    //printf("tensor->op = %d\n", (int)tensor->op);
 
     switch (tensor->op) {
         case GGML_OP_REPEAT:
