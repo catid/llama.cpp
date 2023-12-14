@@ -1478,9 +1478,6 @@ inline static void ggml_vec_silu_f32(const int n, float * y, const float * x) {
         ggml_fp16_t fp16 = GGML_FP32_TO_FP16(x[i]);
         memcpy(&t, &fp16, sizeof(uint16_t));
         y[i] = GGML_FP16_TO_FP32(ggml_table_silu_f16[t]);
-        if (x[i] != y[i]) {
-            printf("%f:%f ", x[i], y[i]);
-        }
     }
 }
 #else

@@ -11,10 +11,14 @@
 
 #include <memory>
 #include <vector>
+#include <atomic>
 
 class CorrelationRecorder
 {
 public:
+    CorrelationRecorder();
+    ~CorrelationRecorder();
+
     void Record(
         const struct ggml_tensor * src0,
         const struct ggml_tensor * src1,
@@ -33,8 +37,24 @@ protected:
 
     std::vector<std::shared_ptr<ThreadContext>> Contexts;
 
+    std::atomic<uint32_t>* Histogram = nullptr;
+
     void RecordRow(int batch, float* row, int count);
 };
+
+CorrelationRecorder::CorrelationRecorder()
+{
+    Histogram = new std::atomic<uint32_t>[11008 * 11008];
+}
+
+CorrelationRecorder::~CorrelationRecorder()
+{
+    for (int i = 0; i < 11008; ++i) {
+        printf("%d ", (int)Histogram[i]); 
+    }
+
+    delete Histogram;
+}
 
 static CorrelationRecorder m_CorrelationRecorder;
 
@@ -65,9 +85,11 @@ void CorrelationRecorder::Record_SILU(
         return;
     }
 
+#if 0
     printf("SILU src0:t=%d:%s[%d,%d,%d] -> dst:t=%d:%s[%d,%d,%d]\n",
         (int)src0->type, src0->name, (int)src0->ne[0], (int)src0->ne[1], (int)src0->ne[2],
         (int)dst->type, dst->name, (int)dst->ne[0], (int)dst->ne[1], (int)dst->ne[2]);
+#endif
 
     const struct ggml_tensor* tensor = dst;
 
@@ -76,15 +98,7 @@ void CorrelationRecorder::Record_SILU(
         for (size_t i = 0; i < n_batch; ++i) {
             uint8_t* row_data = (uint8_t*)tensor->data + tensor->nb[1] * i;
             float* row = (float*)row_data;
-            //RecordRow((int)i, row, (int)tensor->ne[0]);
-
-            uint8_t* row_data0 = (uint8_t*)src0->data + src0->nb[1] * i;
-            float* row0 = (float*)row_data0;
-            for (int j = 0; j < src0->ne[0]; ++j) {
-                if (row0[j] != row[j]) {
-                    printf("%f->%f ", row0[j], row[j]);
-                }
-            }
+            RecordRow((int)i, row, (int)tensor->ne[0]);
         }
         return;
     }
@@ -99,7 +113,7 @@ void CorrelationRecorder::Record(
         return;
     }
 
-#if 1
+#if 0
     printf("ggml_cl_mul_mat src0:t=%d:%s[%d,%d,%d] x src1:t=%d:%s[%d,%d,%d] -> dst:t=%d:%s[%d,%d,%d]\n",
         (int)src0->type, src0->name, (int)src0->ne[0], (int)src0->ne[1], (int)src0->ne[2],
         (int)src1->type, src1->name, (int)src1->ne[0], (int)src1->ne[1], (int)src1->ne[2],
@@ -183,27 +197,22 @@ void CorrelationRecorder::Record(
 
 void CorrelationRecorder::RecordRow(int batch, float* row, int count)
 {
-    if (batch != 1) {
-        return;
-    }
-
-    uint32_t hist[64] = {0};
+    std::vector<int> activations;
 
     for (int i = 0; i < count; ++i) {
         float value = row[i];
-        int bin = (int)((value + 1.0) / 2.f * 64.f);
-        if (bin < 0) { bin = 0; }
-        else if (bin > 63) { bin = 63; }
-        hist[bin] += 1;
+        if (value < 0.5f) {
+            continue;
+        }
+
+        activations.push_back(i);
     }
 
-    uint64_t sum = 0;
-    for (int i = 0; i < 64; ++i) {
-        sum += hist[i];
+    for (int i : activations)
+    {
+        for (int j : activations)
+        {
+            ++Histogram[i * 11008 + j];
+        }
     }
-    for (int i = 0; i < 64; ++i) {
-        double frac = (double)hist[i] / sum;
-        printf("%f ", (float)frac);
-    }
-    printf("\n");
 }
