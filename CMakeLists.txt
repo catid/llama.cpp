@@ -97,6 +97,8 @@ option(LLAMA_METAL_NDEBUG                    "llama: disable Metal debugging"   
 option(LLAMA_MPI                             "llama: use MPI"                                   OFF)
 option(LLAMA_QKK_64                          "llama: use super-block size of 64 for k-quants"   OFF)
 
+option(LLAMA_CORRELATIONS                    "llama: build correlations experiment"             ON)
+
 option(LLAMA_BUILD_TESTS                     "llama: build tests"    ${LLAMA_STANDALONE})
 option(LLAMA_BUILD_EXAMPLES                  "llama: build examples" ${LLAMA_STANDALONE})
 option(LLAMA_BUILD_SERVER                    "llama: build server example"                      ON)
@@ -353,6 +355,13 @@ if (LLAMA_CLBLAST)
     else()
         message(WARNING "CLBlast not found")
     endif()
+endif()
+
+if (LLAMA_CORRELATIONS)
+    set(GGML_SOURCES_EXTRA ${GGML_SOURCES_EXTRA} correlations.cpp)
+    set(GGML_HEADERS_EXTRA ${GGML_HEADERS_EXTRA} correlations.h)
+
+    add_compile_definitions(ENABLE_CORRELATIONS)
 endif()
 
 if (LLAMA_HIPBLAS)

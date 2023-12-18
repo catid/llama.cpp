@@ -8471,135 +8471,9 @@ static void ggml_cuda_mul_mat_mat_batched_cublas(const ggml_tensor * src0, const
     ggml_cuda_pool_free(dst_f16, dst_as);
 }
 
-
-//------------------------------------------------------------------------------
-// Correlation Recorder
-
-#define ENABLE_CORRELATION_RECORDER
-#ifdef ENABLE_CORRELATION_RECORDER
-
-#include <memory>
-#include <stdexcept>
-#include <thread>
-
-class CorrelationRecorder
-{
-public:
-    void Record(ggml_tensor* tensor);
-
-protected:
-    struct ThreadContext
-    {
-        std::vector<float> Row;
-    };
-
-    std::vector<std::shared_ptr<ThreadContext>> Contexts;
-
-    void RecordRow(float* row, int count);
-};
-
-void CorrelationRecorder::RecordRow(float* row, int count)
-{
-    for (int i = 0; i < count; ++i) {
-        printf("%d", (int)(row[0] > 0.0));
-    }
-}
-
-void CorrelationRecorder::Record(ggml_tensor* tensor)
-{
-    if (tensor->type == GGML_TYPE_F32) {
-        size_t n_batch = tensor->ne[1];
-        printf("tensor->nb[0]=%d\n", (int)tensor->nb[0]);
-        printf("tensor->nb[1]=%d\n", (int)tensor->nb[1]);
-        printf("tensor->nb[2]=%d\n", (int)tensor->nb[2]);
-        for (size_t i = 0; i < n_batch; ++i) {
-            uint8_t* row_data = (uint8_t*)tensor->data + tensor->nb[1] * i;
-            float* row = (float*)row_data;
-            if (i == 0) {
-                RecordRow(row, (int)tensor->ne[0]);
-            }
-        }
-        return;
-    }
-
-    ggml_type_traits_t qtype;
-    if (ggml_is_quantized(tensor->type)) {
-        qtype = ggml_internal_get_type_traits(tensor->type);
-        if (qtype.to_float == NULL) {
-            throw std::runtime_error("tensor type does not support to_float");
-        }
-    } else if (tensor->type != GGML_TYPE_F16) {
-        printf("tensor->type = %d\n", (int)tensor->type);
-        throw std::runtime_error("unsupported tensor type - requires FP16 or quantized");
-    }
-
-    size_t nthread = std::thread::hardware_concurrency();
-    size_t n_batch = tensor->ne[1];
-    size_t batch_per_thread = (n_batch + nthread - 1) / nthread;
-
-    std::vector<std::thread> workers;
-
-    Contexts.resize(nthread);
-    for (size_t i = 0; i < nthread; ++i) {
-        if (!Contexts[i]) {
-            Contexts[i] = std::make_shared<ThreadContext>();
-        }
-    }
-
-    for (size_t thr_index = 0; thr_index < nthread; ++thr_index)
-    {
-        size_t thr_start = thr_index * batch_per_thread;
-        size_t thr_count = batch_per_thread;
-        if (thr_start + thr_count > n_batch) {
-            thr_count = n_batch - thr_start;
-        }
-        ThreadContext* ctx = Contexts[thr_index].get();
-
-        auto fn = [this, tensor, qtype](ThreadContext* ctx, size_t start, size_t count)
-        {
-            size_t nelements = tensor->ne[0];
-            if (ctx->Row.size() != nelements) {
-                ctx->Row.resize(nelements);
-            }
-            float* out_row = ctx->Row.data();
-
-            for (size_t i = 0; i < count; ++i) {
-                size_t batch_index = start + i;
-                uint8_t* in_row = (uint8_t*)tensor->data + tensor->nb[1] * batch_index;
-
-                if (tensor->type == GGML_TYPE_F16) {
-                    ggml_fp16_to_fp32_row((ggml_fp16_t *)in_row, out_row, nelements);
-                } else {
-                    qtype.to_float(in_row, out_row, nelements);
-                }
-
-                RecordRow(out_row, (int)nelements);
-            }
-        };
-
-        workers.emplace_back(fn, ctx, thr_start, thr_count);
-    }
-
-    for (auto & w : workers) { w.join(); }
-}
-
-static CorrelationRecorder m_CorrelationRecorder;
-
-#endif // ENABLE_CORRELATION_RECORDER
+#include "correlations.h"
 
 static void ggml_cuda_mul_mat(const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
-
-#ifdef ENABLE_CORRELATION_RECORDER
-    if (0 == strcmp(src0->name, "blk.22.ffn_up.weight")) {
-        printf("ggml_cuda_mul_mat src0:t=%d:%s[%d,%d,%d] x src1:t=%d:%s[%d,%d,%d] -> dst:t=%d:%s[%d,%d,%d]\n",
-            (int)src0->type, src0->name, (int)src0->ne[0], (int)src0->ne[1], (int)src0->ne[2],
-            (int)src1->type, src1->name, (int)src1->ne[0], (int)src1->ne[1], (int)src1->ne[2],
-            (int)dst->type, dst->name, (int)dst->ne[0], (int)dst->ne[1], (int)dst->ne[2]);
-
-        m_CorrelationRecorder.Record(dst);
-    }
-#endif // ENABLE_CORRELATION_RECORDER
-
     const bool all_on_device =
         (src0->backend == GGML_BACKEND_GPU || src0->backend == GGML_BACKEND_GPU_SPLIT) &&
         (src1->backend == GGML_BACKEND_GPU) &&
@@ -8671,6 +8545,10 @@ static void ggml_cuda_mul_mat(const ggml_tensor * src0, const ggml_tensor * src1
     } else {
         GGML_ASSERT(false);
     }
+
+#ifdef ENABLE_CORRELATIONS
+    RecordCorrelations(src0, src1, dst);
+#endif // ENABLE_CORRELATIONS
 }
 
 #if 0

@@ -38,6 +38,8 @@
 #pragma warning(disable: 4996)
 #endif
 
+#include "correlations.h"
+
 #if defined(_WIN32)
 
 #include <windows.h>
@@ -9011,6 +9013,10 @@ static void ggml_compute_forward_silu_f32(
         }
 #endif
     }
+
+#ifdef ENABLE_CORRELATIONS
+    RecordCorrelations_SILU(src0, dst);
+#endif // ENABLE_CORRELATIONS
 }
 
 static void ggml_compute_forward_silu(
@@ -9623,6 +9629,10 @@ static void ggml_compute_forward_mul_mat(
     if (ggml_cl_can_mul_mat(src0, src1, dst)) {
         if (params->ith == 0 && params->type == GGML_TASK_COMPUTE) {
             ggml_cl_mul_mat(src0, src1, dst, params->wdata, params->wsize);
+
+#ifdef ENABLE_CORRELATIONS
+            RecordCorrelations(src0, src1, dst);
+#endif // ENABLE_CORRELATIONS
         }
         return;
     }
@@ -9675,6 +9685,10 @@ static void ggml_compute_forward_mul_mat(
         }
 
         //printf("CBLAS = %f ms, %d x %d x %d x %d\n", (ggml_perf_time_us() - t0)/1000.0, ne0, ne1, ne2, ne3);
+
+#ifdef ENABLE_CORRELATIONS
+        RecordCorrelations(src0, src1, dst);
+#endif // ENABLE_CORRELATIONS
 
         return;
     }
@@ -9787,6 +9801,10 @@ static void ggml_compute_forward_mul_mat(
             }
         }
     }
+
+#ifdef ENABLE_CORRELATIONS
+    RecordCorrelations(src0, src1, dst);
+#endif // ENABLE_CORRELATIONS
 }
 
 // ggml_compute_forward_mul_mat_id

@@ -438,6 +438,11 @@ ggml-opencl.o: ggml-opencl.cpp ggml-opencl.h
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 endif # LLAMA_CLBLAST
 
+ifdef LLAMA_CORRELATIONS
+correlations.o: correlations.cpp correlations.h
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+endif # LLAMA_CORRELATIONS
+
 ifdef LLAMA_HIPBLAS
 	ROCM_PATH	?= /opt/rocm
 	HIPCC	    ?= $(ROCM_PATH)/bin/hipcc
