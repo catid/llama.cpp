@@ -12,11 +12,11 @@
 #include <memory>
 #include <vector>
 #include <atomic>
+#include <mutex>
 
 class CorrelationRecorder
 {
 public:
-    CorrelationRecorder();
     ~CorrelationRecorder();
 
     void Record(
@@ -37,22 +37,17 @@ protected:
 
     std::vector<std::shared_ptr<ThreadContext>> Contexts;
 
+    std::mutex HistogramLock;
+    int HistogramWidth = -1;
     std::atomic<uint32_t>* Histogram = nullptr;
 
     void RecordRow(int batch, float* row, int count);
+    void PrintHistogram(bool full = false);
 };
-
-CorrelationRecorder::CorrelationRecorder()
-{
-    Histogram = new std::atomic<uint32_t>[11008 * 11008];
-}
 
 CorrelationRecorder::~CorrelationRecorder()
 {
-    for (int i = 0; i < 11008; ++i) {
-        printf("%d ", (int)Histogram[i]); 
-    }
-
+    PrintHistogram(true);
     delete Histogram;
 }
 
@@ -72,7 +67,7 @@ void RecordCorrelations_SILU(
     const struct ggml_tensor * src0,
             struct ggml_tensor * dst)
 {
-    m_CorrelationRecorder.Record_SILU(src0, dst);
+    //m_CorrelationRecorder.Record_SILU(src0, dst);
 }
 
 } // extern "C"
@@ -120,32 +115,12 @@ void CorrelationRecorder::Record(
         (int)dst->type, dst->name, (int)dst->ne[0], (int)dst->ne[1], (int)dst->ne[2]);
 #endif
 
-    return;
-
     const struct ggml_tensor* tensor = src1;
 
-    if (tensor->type == GGML_TYPE_F32) {
-        size_t n_batch = tensor->ne[1];
-        for (size_t i = 0; i < n_batch; ++i) {
-            uint8_t* row_data = (uint8_t*)tensor->data + tensor->nb[1] * i;
-            float* row = (float*)row_data;
-            RecordRow((int)i, row, (int)tensor->ne[0]);
-        }
-        return;
-    }
+    //uint64_t t0 = ggml_time_us();
 
-    ggml_type_traits_t qtype;
-    if (ggml_is_quantized(tensor->type)) {
-        qtype = ggml_internal_get_type_traits(tensor->type);
-        if (qtype.to_float == NULL) {
-            throw std::runtime_error("tensor type does not support to_float");
-        }
-    } else if (tensor->type != GGML_TYPE_F16) {
-        printf("tensor->type = %d\n", (int)tensor->type);
-        throw std::runtime_error("unsupported tensor type - requires FP16 or quantized");
-    }
+    size_t nthread = std::thread::hardware_concurrency() * 2;
 
-    size_t nthread = std::thread::hardware_concurrency();
     size_t n_batch = tensor->ne[1];
     size_t batch_per_thread = (n_batch + nthread - 1) / nthread;
 
@@ -158,12 +133,26 @@ void CorrelationRecorder::Record(
         }
     }
 
+    ggml_type_traits_t qtype;
+    if (ggml_is_quantized(tensor->type)) {
+        qtype = ggml_internal_get_type_traits(tensor->type);
+        if (qtype.to_float == NULL) {
+            throw std::runtime_error("tensor type does not support to_float");
+        }
+    } else if (tensor->type != GGML_TYPE_F16 && tensor->type != GGML_TYPE_F32) {
+        printf("tensor->type = %d\n", (int)tensor->type);
+        throw std::runtime_error("unsupported tensor type - requires FP16 or quantized");
+    }
+
     for (size_t thr_index = 0; thr_index < nthread; ++thr_index)
     {
         size_t thr_start = thr_index * batch_per_thread;
         size_t thr_count = batch_per_thread;
         if (thr_start + thr_count > n_batch) {
             thr_count = n_batch - thr_start;
+        }
+        if (thr_count <= 0) {
+            break;
         }
         ThreadContext* ctx = Contexts[thr_index].get();
 
@@ -179,7 +168,9 @@ void CorrelationRecorder::Record(
                 size_t batch_index = start + i;
                 uint8_t* in_row = (uint8_t*)tensor->data + tensor->nb[1] * batch_index;
 
-                if (tensor->type == GGML_TYPE_F16) {
+                if (tensor->type == GGML_TYPE_F32) {
+                    out_row = (float*)in_row;
+                } else if (tensor->type == GGML_TYPE_F16) {
                     ggml_fp16_to_fp32_row((ggml_fp16_t *)in_row, out_row, nelements);
                 } else {
                     qtype.to_float(in_row, out_row, nelements);
@@ -193,6 +184,11 @@ void CorrelationRecorder::Record(
     }
 
     for (auto & w : workers) { w.join(); }
+
+    //uint64_t t1 = ggml_time_us();
+    //printf("%f msec", (t1 - t0)/100.f);
+
+    PrintHistogram();
 }
 
 void CorrelationRecorder::RecordRow(int batch, float* row, int count)
@@ -208,11 +204,33 @@ void CorrelationRecorder::RecordRow(int batch, float* row, int count)
         activations.push_back(i);
     }
 
-    for (int i : activations)
     {
-        for (int j : activations)
-        {
-            ++Histogram[i * 11008 + j];
+        std::lock_guard<std::mutex> locker(HistogramLock);
+        if (!Histogram) {
+            HistogramWidth = count;
+            Histogram = new std::atomic<uint32_t>[count * count];
         }
     }
+
+    for (int i : activations)
+    {
+        const int offset = i * HistogramWidth;
+        for (int j : activations)
+        {
+            ++Histogram[offset + j];
+        }
+    }
+}
+
+void CorrelationRecorder::PrintHistogram(bool full)
+{
+    if (!Histogram) {
+        return;
+    }
+
+    printf("\n");
+    for (int i = 0; i < HistogramWidth && i < 64; ++i) {
+        printf("%d ", (int)Histogram[i]); 
+    }
+    printf("\n");
 }
