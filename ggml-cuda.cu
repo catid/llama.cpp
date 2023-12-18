@@ -8478,10 +8478,14 @@ static void ggml_cuda_mul_mat_mat_batched_cublas(const ggml_tensor * src0, const
 #define ENABLE_CORRELATION_RECORDER
 #ifdef ENABLE_CORRELATION_RECORDER
 
+#include <memory>
+#include <stdexcept>
+#include <thread>
+
 class CorrelationRecorder
 {
 public:
-    void RecordActivations(ggml_tensor* tensor);
+    void Record(ggml_tensor* tensor);
 
 protected:
     struct ThreadContext
@@ -8490,25 +8494,44 @@ protected:
     };
 
     std::vector<std::shared_ptr<ThreadContext>> Contexts;
+
+    void RecordRow(float* row, int count);
 };
 
-void CorrelationRecorder::RecordActivations(ggml_tensor* tensor)
+void CorrelationRecorder::RecordRow(float* row, int count)
 {
+    for (int i = 0; i < count; ++i) {
+        printf("%d", (int)(row[0] > 0.0));
+    }
+}
+
+void CorrelationRecorder::Record(ggml_tensor* tensor)
+{
+    if (tensor->type == GGML_TYPE_F32) {
+        size_t n_batch = tensor->ne[1];
+        printf("tensor->nb[0]=%d\n", (int)tensor->nb[0]);
+        printf("tensor->nb[1]=%d\n", (int)tensor->nb[1]);
+        printf("tensor->nb[2]=%d\n", (int)tensor->nb[2]);
+        for (size_t i = 0; i < n_batch; ++i) {
+            uint8_t* row_data = (uint8_t*)tensor->data + tensor->nb[1] * i;
+            float* row = (float*)row_data;
+            if (i == 0) {
+                RecordRow(row, (int)tensor->ne[0]);
+            }
+        }
+        return;
+    }
+
     ggml_type_traits_t qtype;
     if (ggml_is_quantized(tensor->type)) {
         qtype = ggml_internal_get_type_traits(tensor->type);
         if (qtype.to_float == NULL) {
-            throw std::runtime_error(format("RecordActivations: type %s unsupported for integer quantization: no dequantization available", ggml_type_name(tensor->type)));
+            throw std::runtime_error("tensor type does not support to_float");
         }
     } else if (tensor->type != GGML_TYPE_F16) {
-        throw std::runtime_error(format("RecordActivations: cannot dequantize/convert tensor type %s", ggml_type_name(tensor->type)));
+        printf("tensor->type = %d\n", (int)tensor->type);
+        throw std::runtime_error("unsupported tensor type - requires FP16 or quantized");
     }
-
-    size_t nelements = tensor->ne[0];
-    size_t block_size = tensor->type == GGML_TYPE_F16 ? 1 : (size_t)ggml_blck_size(tensor->type);
-    size_t block_size_bytes = ggml_type_size(tensor->type);
-    GGML_ASSERT(nelements % block_size == 0);
-    size_t nblocks = nelements / block_size;
 
     size_t nthread = std::thread::hardware_concurrency();
     size_t n_batch = tensor->ne[1];
@@ -8521,35 +8544,40 @@ void CorrelationRecorder::RecordActivations(ggml_tensor* tensor)
         if (!Contexts[i]) {
             Contexts[i] = std::make_shared<ThreadContext>();
         }
-        if (Contexts[i]->Row.size() != nelements) {
-            Contexts[i]->Row.resize(nelements);
-        }
     }
 
-    for (size_t thr_start = 0; thr_start < n_batch; thr_start += batch_per_thread)
+    for (size_t thr_index = 0; thr_index < nthread; ++thr_index)
     {
+        size_t thr_start = thr_index * batch_per_thread;
         size_t thr_count = batch_per_thread;
-        if (batch + thr_count > n_batch) {
-            thr_count = n_batch - batch;
+        if (thr_start + thr_count > n_batch) {
+            thr_count = n_batch - thr_start;
         }
+        ThreadContext* ctx = Contexts[thr_index].get();
 
-        auto fn = [this, tensor, qtype, nelements](size_t start, size_t count)
+        auto fn = [this, tensor, qtype](ThreadContext* ctx, size_t start, size_t count)
         {
-            float* out_row = ;
+            size_t nelements = tensor->ne[0];
+            if (ctx->Row.size() != nelements) {
+                ctx->Row.resize(nelements);
+            }
+            float* out_row = ctx->Row.data();
 
             for (size_t i = 0; i < count; ++i) {
-                size_t batch = start + i;
-                uint8_t* in_row = (uint8_t*)tensor->data + tensor->nb[1] * batch;
+                size_t batch_index = start + i;
+                uint8_t* in_row = (uint8_t*)tensor->data + tensor->nb[1] * batch_index;
 
-                if (typ == GGML_TYPE_F16) {
-                    ggml_fp16_to_fp32_row((ggml_fp16_t *)in_row, out_row, nels);
+                if (tensor->type == GGML_TYPE_F16) {
+                    ggml_fp16_to_fp32_row((ggml_fp16_t *)in_row, out_row, nelements);
                 } else {
-                    qtype.to_float(in_row, out_row, nels);
+                    qtype.to_float(in_row, out_row, nelements);
                 }
+
+                RecordRow(out_row, (int)nelements);
             }
         };
 
-        workers.emplace_back(fn, thr_start, thr_count);
+        workers.emplace_back(fn, ctx, thr_start, thr_count);
     }
 
     for (auto & w : workers) { w.join(); }
