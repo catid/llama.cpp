@@ -60,7 +60,7 @@ void RecordCorrelations(
     const struct ggml_tensor * src1,
             struct ggml_tensor * dst)
 {
-    m_CorrelationRecorder.Record(src0, src1, dst);
+    //m_CorrelationRecorder.Record(src0, src1, dst);
 }
 
 void RecordCorrelations_SILU(

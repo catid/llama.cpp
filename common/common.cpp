@@ -415,6 +415,12 @@ bool gpt_params_parse_ex(int argc, char ** argv, gpt_params & params) {
                 break;
             }
             params.n_chunks = std::stoi(argv[i]);
+        } else if (arg == "--chunk-start") {
+            if (++i >= argc) {
+                invalid_param = true;
+                break;
+            }
+            params.n_chunk_start = std::stoi(argv[i]);
         } else if (arg == "-np" || arg == "--parallel") {
             if (++i >= argc) {
                 invalid_param = true;

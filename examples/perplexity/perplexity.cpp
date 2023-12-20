@@ -187,16 +187,22 @@ static results_perplexity perplexity_v2(llama_context * ctx, const gpt_params & 
 
     const int n_chunk_max = (tokens.size() - calc_chunk + params.ppl_stride - 1)  / params.ppl_stride;
 
-    const int n_chunk = params.n_chunks < 0 ? n_chunk_max : std::min(params.n_chunks, n_chunk_max);
+    int n_chunk = params.n_chunks < 0 ? n_chunk_max : std::min(params.n_chunks, n_chunk_max);
     const int n_vocab = llama_n_vocab(llama_get_model(ctx));
     const int n_batch = params.n_batch;
+    const int n_chunk_start = std::min(params.n_chunk_start, n_chunk - 1);
+
+    if (n_chunk_start + n_chunk > n_chunk_max) {
+        n_chunk = n_chunk_max - n_chunk_start;
+        printf("Adjusted n_chunk = %d due to n_chunk_start=%d and n_chunk_max=%d\n", n_chunk, n_chunk_start, n_chunk_max);
+    }
 
     int count = 0;
     double nll = 0.0;
 
     fprintf(stderr, "%s: calculating perplexity over %d chunks, batch_size=%d\n", __func__, n_chunk, n_batch);
 
-    for (int i = 0; i < n_chunk; ++i) {
+    for (int i = n_chunk_start; i < n_chunk_start + n_chunk; ++i) {
         const int start =     i * params.ppl_stride;
         const int end   = start + calc_chunk;
 
