@@ -21,29 +21,48 @@ def log_output(process, addr):
     for line in iter(process.stdout.readline, ""):
         logger.info(f"[{addr}] {line.rstrip()}")
 
-def copy_data_to_machines(node_addresses):
-    abs_path = os.path.join(app_path, data_path)
+def copy_data_to_machine(host, abs_path):
     parent_path = os.path.dirname(abs_path)
 
+    cmd = f"rsync -avz --rsync-path='mkdir -p {parent_path} && rsync' {abs_path}/ {host}:{abs_path}"
+    try:
+        subprocess.run(cmd, shell=True, check=True)
+        print(f"Successfully copied {abs_path} to {host}")
+    except subprocess.CalledProcessError as e:
+        print(f"Failed to copy {abs_path} to {host}: {e}")
+
+def copy_data_to_machines(node_addresses):
+    abs_path = os.path.join(app_path, data_path)
+
+    threads = []
     for host, _ in node_addresses:
-        cmd = f"rsync -avz --rsync-path=\"mkdir -p {parent_path} && rsync\" {abs_path} {host}:{abs_path}"
-        try:
-            subprocess.run(cmd, shell=True, check=True)
-            print(f"Successfully copied {abs_path} to {host}")
-        except subprocess.CalledProcessError as e:
-            print(f"Failed to copy {abs_path} to {host}: {e}")
+        thread = threading.Thread(target=copy_data_to_machine, args=(host, abs_path))
+        thread.start()
+        threads.append(thread)
+
+    for thread in threads:
+        thread.join()
+
+def copy_model_to_machine(host, parent_path, abs_path):
+    cmd = f"rsync -avz --rsync-path='mkdir -p {parent_path} && rsync' {parent_path}/ {host}:{parent_path}"
+    try:
+        subprocess.run(cmd, shell=True, check=True)
+        print(f"Successfully copied {abs_path} to {host}")
+    except subprocess.CalledProcessError as e:
+        print(f"Failed to copy {abs_path} to {host}: {e}")
 
 def copy_model_to_machines(node_addresses):
     abs_path = os.path.join(app_path, model_path)
     parent_path = os.path.dirname(abs_path)
 
+    threads = []
     for host, _ in node_addresses:
-        cmd = f"rsync -avz --rsync-path=\"mkdir -p {parent_path} && rsync\" {abs_path} {host}:{abs_path}"
-        try:
-            subprocess.run(cmd, shell=True, check=True)
-            print(f"Successfully copied {abs_path} to {host}")
-        except subprocess.CalledProcessError as e:
-            print(f"Failed to copy {abs_path} to {host}: {e}")
+        thread = threading.Thread(target=copy_model_to_machine, args=(host, parent_path, abs_path))
+        thread.start()
+        threads.append(thread)
+
+    for thread in threads:
+        thread.join()
 
 def launch_servers(node_addresses, total_chunks):
     processes = []
