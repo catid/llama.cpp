@@ -272,7 +272,7 @@ static results_perplexity perplexity_v2(llama_context * ctx, const gpt_params & 
         }
         // perplexity is e^(average negative log-likelihood)
         if (params.ppl_output_type == 0) {
-            printf("[%d]%.4lf,", i + 1, std::exp(nll / count));
+            printf("[%d]%.4lf,", i, std::exp(nll / count));
         } else {
             printf("%8d  %.4lf\n", i*params.ppl_stride, std::exp(nll / count));
         }
@@ -319,9 +319,15 @@ static results_perplexity perplexity(llama_context * ctx, const gpt_params & par
 
     const int n_chunk_max = tokens.size() / n_ctx;
 
-    const int n_chunk = params.n_chunks < 0 ? n_chunk_max : std::min(params.n_chunks, n_chunk_max);
+    int n_chunk = params.n_chunks < 0 ? n_chunk_max : std::min(params.n_chunks, n_chunk_max);
     const int n_vocab = llama_n_vocab(llama_get_model(ctx));
     const int n_batch = params.n_batch;
+    const int n_chunk_start = std::min(params.n_chunk_start, n_chunk - 1);
+
+    if (n_chunk_start + n_chunk > n_chunk_max) {
+        n_chunk = n_chunk_max - n_chunk_start;
+        printf("Adjusted n_chunk = %d due to n_chunk_start=%d and n_chunk_max=%d\n", n_chunk, n_chunk_start, n_chunk_max);
+    }
 
     int count = 0;
     double nll = 0.0;
@@ -331,7 +337,7 @@ static results_perplexity perplexity(llama_context * ctx, const gpt_params & par
 
     std::vector<std::thread> workers(std::thread::hardware_concurrency() - 1);
 
-    for (int i = 0; i < n_chunk; ++i) {
+    for (int i = n_chunk_start; i < n_chunk_start + n_chunk; ++i) {
         const int start =     i * n_ctx;
         const int end   = start + n_ctx;
 
@@ -400,7 +406,7 @@ static results_perplexity perplexity(llama_context * ctx, const gpt_params & par
 
         // perplexity is e^(average negative log-likelihood)
         if (params.ppl_output_type == 0) {
-            printf("[%d]%.4lf,", i + 1, std::exp(nll / count));
+            printf("[%d]%.4lf,", i, std::exp(nll / count));
         } else {
             double av = nll/count;
             double av2 = nll2/count - av*av;
