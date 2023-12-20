@@ -8547,7 +8547,7 @@ static void ggml_cuda_mul_mat(const ggml_tensor * src0, const ggml_tensor * src1
     }
 
 #ifdef ENABLE_CORRELATIONS
-    RecordCorrelations(src0, src1, dst);
+    RecordCorrelations_MulMat(src0, src1, dst);
 #endif // ENABLE_CORRELATIONS
 }
 

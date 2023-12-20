@@ -1862,7 +1862,7 @@ void ggml_cl_mul_mat(const struct ggml_tensor * src0, const struct ggml_tensor *
     }
 
 #ifdef ENABLE_CORRELATIONS
-    RecordCorrelations(src0, src1, dst);
+    RecordCorrelations_MulMat(src0, src1, dst);
 #endif // ENABLE_CORRELATIONS
 }
 

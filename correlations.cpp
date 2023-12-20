@@ -13,6 +13,26 @@
 
 
 //------------------------------------------------------------------------------
+// Tools
+
+static bool matchAndExtractNumber(const char* src0_name, int& extractedNumber)
+{
+    std::regex pattern("blk.([0-9]{1,2}).ffn_down.weight");
+    std::smatch matches;
+    std::string s = src0_name;
+
+    if (std::regex_search(s, matches, pattern)) {
+        if (matches.size() == 2) { // matches[0] is the whole string, matches[1] is the first group
+            extractedNumber = std::stoi(matches[1].str());
+            return true;
+        }
+    }
+
+    return false;
+}
+
+
+//------------------------------------------------------------------------------
 // Correlation Recorder
 
 class CorrelationRecorder
@@ -20,13 +40,7 @@ class CorrelationRecorder
 public:
     ~CorrelationRecorder();
 
-    void Record(
-        const struct ggml_tensor * src0,
-        const struct ggml_tensor * src1,
-              struct ggml_tensor * dst);
-    void Record_SILU(
-        const struct ggml_tensor * src0,
-              struct ggml_tensor * dst);
+    void RecordTensor(const struct ggml_tensor * src0);
 
     static CorrelationRecorder* GetInstance();
 
@@ -56,27 +70,31 @@ static CorrelationRecorder m_CorrelationRecorder;
 
 extern "C" {
 
-void RecordCorrelations(
+void RecordCorrelations_MulMat(
     const struct ggml_tensor * src0,
     const struct ggml_tensor * src1,
             struct ggml_tensor * dst)
 {
-    m_CorrelationRecorder.Record(src0, src1, dst);
+    int block_number = -1;
+    if (!matchAndExtractNumber(src0->name, block_number)) {
+        return;
+    }
+
+#if 0
+    printf("ggml_cl_mul_mat src0:t=%d:%s[%d,%d,%d] x src1:t=%d:%s[%d,%d,%d] -> dst:t=%d:%s[%d,%d,%d]\n",
+        (int)src0->type, src0->name, (int)src0->ne[0], (int)src0->ne[1], (int)src0->ne[2],
+        (int)src1->type, src1->name, (int)src1->ne[0], (int)src1->ne[1], (int)src1->ne[2],
+        (int)dst->type, dst->name, (int)dst->ne[0], (int)dst->ne[1], (int)dst->ne[2]);
+#endif
+
+    m_CorrelationRecorder.RecordTensor(src1);
 }
 
-void RecordCorrelations_SILU(
+void RecordCorrelations_Activation(
     const struct ggml_tensor * src0,
             struct ggml_tensor * dst)
 {
-    //m_CorrelationRecorder.Record_SILU(src0, dst);
-}
-
-} // extern "C"
-
-void CorrelationRecorder::Record_SILU(
-        const struct ggml_tensor * src0,
-              struct ggml_tensor * dst)
-{
+#if 0
     if (0 != strcmp(dst->name, "ffn_silu-28")) {
         return;
     }
@@ -87,55 +105,16 @@ void CorrelationRecorder::Record_SILU(
         (int)dst->type, dst->name, (int)dst->ne[0], (int)dst->ne[1], (int)dst->ne[2]);
 #endif
 
-    const struct ggml_tensor* tensor = dst;
-
-    if (tensor->type == GGML_TYPE_F32) {
-        size_t n_batch = tensor->ne[1];
-        for (size_t i = 0; i < n_batch; ++i) {
-            uint8_t* row_data = (uint8_t*)tensor->data + tensor->nb[1] * i;
-            float* row = (float*)row_data;
-            RecordRow((int)i, row, (int)tensor->ne[0]);
-        }
-        return;
-    }
+    m_CorrelationRecorder.RecordTensor(dst);
+#endif
 }
 
-bool matchAndExtractNumber(const char* src0_name, int& extractedNumber) {
-    std::regex pattern("blk.([0-9]{1,2}).ffn_down.weight");
-    std::smatch matches;
-    std::string s = src0_name;
+} // extern "C"
 
-    if (std::regex_search(s, matches, pattern)) {
-        if (matches.size() == 2) { // matches[0] is the whole string, matches[1] is the first group
-            extractedNumber = std::stoi(matches[1].str());
-            return true;
-        }
-    }
-
-    return false;
-}
-
-void CorrelationRecorder::Record(
-        const struct ggml_tensor * src0,
-        const struct ggml_tensor * src1,
-              struct ggml_tensor * /*dst*/)
+void CorrelationRecorder::RecordTensor(const struct ggml_tensor * tensor)
 {
-    int block_number = -1;
-    if (!matchAndExtractNumber(src0->name, block_number)) {
-        return;
-    }
-
     // FIXME: Different context for each block
     // FIXME: Write the correlation matrix to disk
-
-#if 0
-    printf("ggml_cl_mul_mat src0:t=%d:%s[%d,%d,%d] x src1:t=%d:%s[%d,%d,%d] -> dst:t=%d:%s[%d,%d,%d]\n",
-        (int)src0->type, src0->name, (int)src0->ne[0], (int)src0->ne[1], (int)src0->ne[2],
-        (int)src1->type, src1->name, (int)src1->ne[0], (int)src1->ne[1], (int)src1->ne[2],
-        (int)dst->type, dst->name, (int)dst->ne[0], (int)dst->ne[1], (int)dst->ne[2]);
-#endif
-
-    const struct ggml_tensor* tensor = src1;
 
     //uint64_t t0 = ggml_time_us();
 
@@ -224,7 +203,7 @@ void CorrelationRecorder::RecordRow(int /*batch*/, float* row, int count)
         activations.push_back(i);
     }
 
-    if (activations.size() > 5000) {
+    if (activations.size() > 6000) {
         printf("WARNING: Correlating large number of activations=%d\n", (int)activations.size());
     }
 
@@ -232,7 +211,8 @@ void CorrelationRecorder::RecordRow(int /*batch*/, float* row, int count)
         std::lock_guard<std::mutex> locker(HistogramLock);
         if (!Histogram) {
             HistogramWidth = count;
-            Histogram = new std::atomic<uint32_t>[count * count];
+            const int elements = count * (count + 1) / 2;
+            Histogram = new std::atomic<uint32_t>[elements];
         }
     }
 

@@ -12,12 +12,12 @@
 extern "C" {
 #endif
 
-void RecordCorrelations(
+void RecordCorrelations_MulMat(
     const struct ggml_tensor * src0,
     const struct ggml_tensor * src1,
             struct ggml_tensor * dst);
 
-void RecordCorrelations_SILU(
+void RecordCorrelations_Activation(
     const struct ggml_tensor * src0,
             struct ggml_tensor * dst);
 

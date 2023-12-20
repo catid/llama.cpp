@@ -1,0 +1,6 @@
+gpu1.lan 15
+gpu2.lan 15
+gpu3.lan 20
+gpu4.lan 20
+gpu5.lan 20
+gpu6.lan 20
