@@ -33,6 +33,18 @@ def copy_data_to_machines(node_addresses):
         except subprocess.CalledProcessError as e:
             print(f"Failed to copy {abs_path} to {host}: {e}")
 
+def copy_model_to_machines(node_addresses):
+    abs_path = os.path.join(app_path, model_path)
+    parent_path = os.path.dirname(abs_path)
+
+    for host, _ in node_addresses:
+        cmd = f"rsync -avz --rsync-path=\"mkdir -p {parent_path} && rsync\" {abs_path} {host}:{abs_path}"
+        try:
+            subprocess.run(cmd, shell=True, check=True)
+            print(f"Successfully copied {abs_path} to {host}")
+        except subprocess.CalledProcessError as e:
+            print(f"Failed to copy {abs_path} to {host}: {e}")
+
 def launch_servers(node_addresses, total_chunks):
     processes = []
     log_threads = []
@@ -41,6 +53,7 @@ def launch_servers(node_addresses, total_chunks):
     total_threads = sum(int(thread_count) for _, thread_count in node_addresses)
 
     copy_data_to_machines(node_addresses)
+    copy_model_to_machines(node_addresses)
 
     start_chunk = 0
     for host, thread_count_str in node_addresses:
@@ -52,8 +65,7 @@ def launch_servers(node_addresses, total_chunks):
         if server_chunks <= 0:
             break
 
-        #cmd = f"pdsh -b -R ssh -w {host} \"cd {app_path} && ./build/bin/perplexity -m {model_path} -f {data_path} --chunks {server_chunks} --chunk-start {start_chunk} -t {thread_count}\""
-        cmd = f"pdsh -b -R ssh -w {host} \"cd {app_path} && echo -m {model_path} -f {data_path} --chunks {server_chunks} --chunk-start {start_chunk} -t {thread_count}\""
+        cmd = f"pdsh -b -R ssh -w {host} \"cd {app_path} && ./build/bin/perplexity -m {model_path} -f {data_path} --chunks {server_chunks} --chunk-start {start_chunk} -t {thread_count}\""
         logger.info(f"Running command: {cmd}")
 
         start_chunk += server_chunks
