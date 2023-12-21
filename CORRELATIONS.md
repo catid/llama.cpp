@@ -1,5 +1,7 @@
 # Neuron Correlation Experiment
 
+A Neuron is one activation path through the Feed Forward Network of a Transformer Block in a Large Language Model.  Do neurons tend to fire together (are their activations correlated)?  Let's find out!
+
 To enable the experimental features, build with -DLLAMA_CORRELATIONS=ON:
 
 ```bash
@@ -7,7 +9,7 @@ git clone https://github.com/catid/llama.cpp
 cd llama.cpp
 mkdir build
 cd build
-cmake -DLLAMA_CORRELATIONS=ON ..
+cmake -DLLAMA_CORRELATIONS=ON -DLLAMA_CUBLAS=ON ..
 make -j16
 ```
 
