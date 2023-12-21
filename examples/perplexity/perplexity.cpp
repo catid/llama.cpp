@@ -321,18 +321,14 @@ static results_perplexity perplexity(llama_context * ctx, const gpt_params & par
     const int n_chunk_max = tokens.size() / n_ctx;
 
     int n_chunk = params.n_chunks < 0 ? n_chunk_max : std::min(params.n_chunks, n_chunk_max);
-
-    printf("FIXME n_chunk = %d\n", n_chunk);
-
     const int n_vocab = llama_n_vocab(llama_get_model(ctx));
     const int n_batch = params.n_batch;
-    const int n_chunk_start = std::min(params.n_chunk_start, n_chunk - 1);
+    const int n_chunk_start = std::min(params.n_chunk_start, n_chunk_max - 1);
 
     if (n_chunk_start + n_chunk > n_chunk_max) {
         n_chunk = n_chunk_max - n_chunk_start;
         printf("Adjusted n_chunk = %d due to n_chunk_start=%d and n_chunk_max=%d\n", n_chunk, n_chunk_start, n_chunk_max);
     }
-    printf("FIXME n_chunk = %d due to n_chunk_start=%d and n_chunk_max=%d\n", n_chunk, n_chunk_start, n_chunk_max);
 
     int count = 0;
     double nll = 0.0;
@@ -345,8 +341,6 @@ static results_perplexity perplexity(llama_context * ctx, const gpt_params & par
     for (int i = n_chunk_start; i < n_chunk_start + n_chunk; ++i) {
         const int start =     i * n_ctx;
         const int end   = start + n_ctx;
-
-        printf("Chunk %d\n", i);
 
         const int num_batches = (n_ctx + n_batch - 1) / n_batch;
 

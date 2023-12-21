@@ -794,8 +794,10 @@ bool gpt_params_parse_ex(int argc, char ** argv, gpt_params & params) {
     }
 
 #ifdef ENABLE_CORRELATIONS
-    printf("Forcing n_thread = 1 for correlation calculations");
-    params.n_threads = 1;
+    if (params.n_threads != 1) {
+        printf("warning: Forcing n_thread = 1 for correlation calculations\n");
+        params.n_threads = 1;
+    }
 #endif // ENABLE_CORRELATIONS
 
     return true;
