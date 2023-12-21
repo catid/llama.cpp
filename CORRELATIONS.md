@@ -99,7 +99,7 @@ This script will create a `workspace` and `outputs` folders.  Files from other m
 Finally you can produce pretty correlation graphs by running:
 
 ```bash
-./build/bin/analyze_correlations
+./build/bin/study_correlations
 ```
 
 This reads the files from `outputs` and generates `.png` heatmaps to visualize the full data, and provides interesting aggregated statistics about the data that can be graphed using other tools.
