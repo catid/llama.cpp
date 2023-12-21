@@ -330,6 +330,8 @@ static results_perplexity perplexity(llama_context * ctx, const gpt_params & par
         printf("Adjusted n_chunk = %d due to n_chunk_start=%d and n_chunk_max=%d\n", n_chunk, n_chunk_start, n_chunk_max);
     }
 
+    printf("FIXME: n_chunk = %d due to n_chunk_start=%d and n_chunk_max=%d\n", n_chunk, n_chunk_start, n_chunk_max);
+
     int count = 0;
     double nll = 0.0;
     double nll2 = 0.0;
