@@ -67,6 +67,9 @@ void GenerateHeatmap(CorrelationMatrix& m)
         } else if (bin >= width) {
             bin = width - 1;
         }
+
+        // Note this has an aliasing artifact that will cause this to jump up and down based on variance.
+        // I kind of like this because it visually demonstrates variance in the data without additional effort.
         histogram[bin] += hdata[i];
     }
 
@@ -112,19 +115,24 @@ void GenerateHeatmap(CorrelationMatrix& m)
 
     for (int i = 0; i < width; ++i) {
         int offset = i * (i + 1) / 2;
+
+        uint32_t diag_value = m.Data[offset];
+
         for (int j = 0; j <= i; ++j) {
             int heat = 0;
 
-            int value = m.Data[offset + j];
-            if (value > 0 && value <= cutoff) {
-                double norm_value = log(value) / (double)log(cutoff);
+            if (diag_value < cutoff) {
+                int value = m.Data[offset + j];
+                if (value > 0) {
+                    double norm_value = log(value) / (double)log(cutoff);
 
-                heat = norm_value * 255.0;
-                if (heat < 0) {
-                    heat = 0;
-                }
-                if (heat > 255) {
-                    heat = 255;
+                    heat = norm_value * 255.0;
+                    if (heat < 0) {
+                        heat = 0;
+                    }
+                    if (heat > 255) {
+                        heat = 255;
+                    }
                 }
             }
 
