@@ -67,7 +67,7 @@ def main():
         os.makedirs(workspace, exist_ok=True)
 
         print(f"Fetching files from {hostname}...")
-        os.system(f"rsync -avz -e ssh {hostname}:{app_path}/correlations_block_*.bin {workspace}")
+        os.system(f"rsync -avz -e ssh {hostname}:{app_path}/correlations_block_*.zstd {workspace}")
 
         print(f"Checking files from {hostname}...")
         work_files = [os.path.join(workspace, f) for f in os.listdir(workspace) if f.startswith('correlations_block_')]
