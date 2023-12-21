@@ -6,6 +6,9 @@ import re
 import subprocess
 
 app_path = "/home/catid/sources/llama.cpp"
+
+# Be careful here about memory usage.  Each thread needs over 400 MB (Mistral 7B) depending on the size of the correlation matrices.
+# So 24 threads would take 10 GB of RAM.  This seems reasonable but you may need to set it lower.
 nthreads = 24
 
 def read_node_addresses(filename="servers.txt"):
@@ -35,16 +38,15 @@ def verify_and_process_files(file1, file2):
 def process_files_in_threads(out_files, work_files):
     threads = []
     for i in range(0, len(out_files)):
-        if i < len(work_files):  # Ensuring there's a corresponding file in work_files
-            thread = threading.Thread(target=verify_and_process_files, args=(out_files[i], work_files[i]))
-            threads.append(thread)
-            thread.start()
+        thread = threading.Thread(target=verify_and_process_files, args=(out_files[i], work_files[i]))
+        threads.append(thread)
+        thread.start()
 
-            # If we have 24 active threads, wait for them to complete before starting more
-            if len(threads) >= nthreads:
-                for t in threads:
-                    t.join()
-                threads = []  # Reset the list for the next batch of threads
+        # If we have 24 active threads, wait for them to complete before starting more
+        if len(threads) >= nthreads:
+            for t in threads:
+                t.join()
+            threads = []  # Reset the list for the next batch of threads
 
     # Wait for any remaining threads to complete
     for t in threads:
@@ -55,7 +57,6 @@ def natural_sort_key(s):
 
 def main():
     servers = read_node_addresses()
-    username = 'your_username'
     workspace = './workspace/'
     outputs_dir = './outputs/'
 

@@ -83,6 +83,8 @@ Finally, launch the correlation calculation job by running:
 python scripts/launch_correlations.py 642
 ```
 
+FIXME: Note the Python scripts all use some hard-coded paths/parameters you'll need to update for your own cluster.
+
 This will copy the models/data to the other computers, build the software on all the other computers, and compute the neuron activation correlations.  Before terminating each one will write the big correlation matrices to disk as `correlations_block_XX.zstd` - This is a Zstd compressed file with the format:
 
 ```
@@ -110,10 +112,10 @@ python scripts/delete_correlations.py
 Finally you can produce pretty correlation graphs by running:
 
 ```bash
-./build/bin/study_correlations
+python scripts/study_correlations.py
 ```
 
-This reads the files from `outputs` and generates `.png` heatmaps to visualize the full data, and provides interesting aggregated statistics about the data that can be graphed using other tools.
+This reads the files from `outputs` and generates `.png` heatmaps to visualize the full data, and provides interesting aggregated statistics about the data that can be graphed using other tools.  It uses the built `./build/bin/study_correlations` C++ application for speed.
 
 
 ## Why is this useful?
