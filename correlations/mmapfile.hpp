@@ -1,5 +1,6 @@
-#include <cstdint.h>
+#pragma once
 
+#include <stdint.h>
 
 //------------------------------------------------------------------------------
 // Memory-mapped file

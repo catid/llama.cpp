@@ -21,6 +21,9 @@ void RecordCorrelations_Activation(
 
 void RecordCorrelations_WriteResults();
 
+// Returns 0 on success, non-zero on test failure
+int32_t RecordCorrelations_SelfTest();
+
 #ifdef __cplusplus
 } // extern "C"
 #endif

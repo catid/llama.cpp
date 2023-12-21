@@ -31,6 +31,8 @@ endif()
 
 add_executable(study_correlations
     study_correlations.cpp
+    mmapfile.cpp
+    mmapfile.hpp
     compress.cpp
     compress.hpp
 )
@@ -40,6 +42,8 @@ target_link_libraries(study_correlations PUBLIC zstd)
 
 add_executable(sum_correlations
     sum_correlations.cpp
+    mmapfile.cpp
+    mmapfile.hpp
     compress.cpp
     compress.hpp
 )

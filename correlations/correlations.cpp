@@ -1,6 +1,7 @@
 #include "../ggml.h"
 
 #include "correlations.h"
+#include "compress.hpp"
 
 #include <stdio.h>
 #include <string.h>
@@ -122,6 +123,15 @@ void RecordCorrelations_Activation(
 
     m_CorrelationRecorder.RecordTensor(block_number, dst);
 #endif
+}
+
+int32_t RecordCorrelations_SelfTest()
+{
+    if (!CorrelationMatrix_UnitTest()) {
+        return -1;
+    }
+
+    return 0;
 }
 
 } // extern "C"
@@ -277,22 +287,10 @@ void CorrelationRecorder::BlockContext::WriteHistogramToFile(const std::string& 
         return;
     }
 
-    // Open a file in binary mode
-    std::ofstream file(filename, std::ios::binary);
-    if (!file.is_open()) {
-        throw std::runtime_error("Unable to open file");
-    }
-
-    const uint32_t width = static_cast<uint32_t>( HistogramWidth );
-    file.write(reinterpret_cast<const char*>(&width), sizeof(width));
-
-    // Write the elements of the array
-    const int elements = static_cast<int>( HistogramWidth * (HistogramWidth + 1) / 2 );
-    for (int i = 0; i < elements; ++i) {
-        const uint32_t value = Histogram[i].load(); // Convert std::atomic to uint32_t
-        file.write(reinterpret_cast<const char*>(&value), sizeof(value));
+    if (!WriteCorrelationMatrix(Histogram, HistogramWidth, BlockNumber, filename)) {
+        throw std::runtime_error("Failed to write matrix to file");
     }
 
     uint64_t t1 = ggml_time_us();
-    printf("Wrote %d element triangular correlation matrix in %f msec\n", elements, (t1 - t0)/1000.f);
+    printf("Wrote %d element triangular correlation matrix in %f msec\n", HistogramWidth, (t1 - t0)/1000.f);
 }

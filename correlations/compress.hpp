@@ -15,6 +15,8 @@ bool WriteCorrelationMatrix(
 class CorrelationMatrix
 {
 public:
+    ~CorrelationMatrix();
+
     int BlockNumber = -1;
     int MatrixWidth = -1;
     int WordCount = -1;
@@ -23,3 +25,6 @@ public:
     bool ReadFile(const std::string& file_path);
     bool Accumulate(const CorrelationMatrix& other);
 };
+
+// Write out some randomized data and read it back in to verify the code works
+bool CorrelationMatrix_UnitTest();
