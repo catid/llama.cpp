@@ -35,9 +35,76 @@ void GenerateHeatmap(CorrelationMatrix& m)
     cout << "99% value: " << value99 << endl;
     cout << "max value: " << value_max << endl;
 
+    const int width = m.MatrixWidth;
+
+    // Histogram
+
+    const int hist_w = 8000; int hist_h = 4000;
+    uint32_t* hdata = (uint32_t*)SIMDSafeAllocate(width * 4);
+    uint32_t* histogram = (uint32_t*)SIMDSafeAllocate(hist_w * 4);
+    uint8_t* histogram_image = SIMDSafeAllocate(hist_w * hist_h);
+    ScopedF histogram_scope([&]() {
+        SIMDSafeFree(hdata);
+        SIMDSafeFree(histogram);
+        SIMDSafeFree(histogram_image);
+    });
+
+    for (int i = 0; i < width; ++i) {
+        const int diagonal_j = i * (i + 1) / 2;
+        uint32_t value = m.Data[diagonal_j];
+        hdata[i] = value;
+    }
+    std::sort(hdata, hdata + width);
+
+    for (int i = 0; i < hist_w; ++i) {
+        histogram[i] = 0;
+    }
+
+    for (int i = 0; i < width; ++i) {
+        int bin = i * hist_w / width;
+        if (bin < 0) {
+            bin = 0;
+        } else if (bin >= width) {
+            bin = width - 1;
+        }
+        histogram[bin] += hdata[i];
+    }
+
+    uint32_t hist_max = histogram[0];
+    for (int i = 1; i < hist_w; ++i) {
+        if (hist_max < histogram[i]) {
+            hist_max = histogram[i];
+        }
+    }
+
+    for (int i = 0; i < hist_w; ++i) {
+        int height = (int)(histogram[i] / (double)hist_max * hist_h);
+        if (height < 0) {
+            height = 0;
+        } else if (height >= hist_h) {
+            height = hist_h;
+        }
+
+        for (int j = 0; j < hist_h; ++j) {
+            histogram_image[i + (hist_h - 1 - j) * hist_w] = j > height ? 0 : 255;
+        }
+    }
+
+    // Write histogram
+
+    cv::Mat hist_image(hist_h, hist_w, CV_8UC1, (void*)histogram_image);
+
+    std::string hist_filename = "histogram_block_";
+    hist_filename += std::to_string(m.BlockNumber);
+    hist_filename += ".png";
+
+    cv::imwrite(hist_filename, hist_image);
+
     // Generate heatmap
 
-    const int width = m.MatrixWidth;
+    // There is a set of neurons that are very active and not correlated
+    const int cutoff = value_max / 20;
+
     uint8_t* heatmap = SIMDSafeAllocate(width * width);
     ScopedF heatmap_scope([&]() {
         SIMDSafeFree(heatmap);
@@ -46,30 +113,35 @@ void GenerateHeatmap(CorrelationMatrix& m)
     for (int i = 0; i < width; ++i) {
         int offset = i * (i + 1) / 2;
         for (int j = 0; j <= i; ++j) {
+            int heat = 0;
+
             int value = m.Data[offset + j];
-            float norm_value = (value - value1) / (float)(value99 - value1);
-            int heat = norm_value * 255.f;
-            if (heat < 0) {
-                heat = 0;
-            }
-            if (heat > 255) {
-                heat = 255;
+            if (value > 0 && value <= cutoff) {
+                double norm_value = log(value) / (double)log(cutoff);
+
+                heat = norm_value * 255.0;
+                if (heat < 0) {
+                    heat = 0;
+                }
+                if (heat > 255) {
+                    heat = 255;
+                }
             }
 
-            heatmap[i * width + j] = heat;
-            heatmap[j * width + i] = heat;
+            heatmap[i * width + j] = (uint8_t)heat;
+            heatmap[j * width + i] = (uint8_t)heat;
         }
     }
 
     // Store as a PNG image
 
-    cv::Mat image(width, width, CV_8UC1, (void*)heatmap);
+    cv::Mat heatmap_image(width, width, CV_8UC1, (void*)heatmap);
 
-    std::string filename = "heatmap_block_";
-    filename += std::to_string(m.BlockNumber);
-    filename += ".png";
+    std::string heatmap_filename = "heatmap_block_";
+    heatmap_filename += std::to_string(m.BlockNumber);
+    heatmap_filename += ".png";
 
-    cv::imwrite(filename, image);
+    cv::imwrite(heatmap_filename, heatmap_image);
 }
 
 int main(int argc, char* argv[])

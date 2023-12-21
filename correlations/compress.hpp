@@ -7,6 +7,22 @@
 
 static const uint32_t kCorrelationFileHead = 0xca7dca7d;
 
+/*
+    Terminology warning:
+
+    We are calling this object a CorrelationMatrix, however it is actually a
+    histogram of the number of co-events for neurons firing.  As a result,
+    this matrix is actually a joint-probability matrix.  The diagonal measures
+    P(X), where X=the event neuron X fires.  P(X,Y) = P(Y,X) is the probability
+    that neurons X and Y fire.  P(X|Y) = P(X,Y) / P(Y) by Bayes' theorem.
+
+    It requires additional processing to convert this into an actual correlation
+    matrix, which is still square and symmetric.  The data is easier to compress
+    and download if we instead collect just the joint-probability matrix at first
+    and the convert to correlation matrix after we have collected all the data
+    from all the nodes in the cluster.
+*/
+
 bool WriteCorrelationMatrix(
     const uint32_t* matrix_data,
     int matrix_width,
