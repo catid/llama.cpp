@@ -15,7 +15,7 @@ def remove_bin_files(servers):
     print(f"Servers: {server_list}")
 
     # Construct pdsh command
-    command = f"pdsh -b -R ssh -w {server_list} 'rm -f {app_path}/correlations_*.bin'"
+    command = f"pdsh -b -R ssh -w {server_list} 'rm -f {app_path}/correlations_*.zstd'"
 
     # Execute the command
     try:
