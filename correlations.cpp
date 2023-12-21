@@ -10,6 +10,10 @@
 #include <atomic>
 #include <mutex>
 #include <regex>
+#include <fstream>
+
+static const float kNegativeThreshold = -0.5f;
+static const float kPositiveThreshold = 0.5f;
 
 
 //------------------------------------------------------------------------------
@@ -38,37 +42,46 @@ static bool matchAndExtractNumber(const char* src0_name, int& extractedNumber)
 class CorrelationRecorder
 {
 public:
-    ~CorrelationRecorder();
-
-    void RecordTensor(const struct ggml_tensor * src0);
-
-    static CorrelationRecorder* GetInstance();
+    void RecordTensor(int block_number, const struct ggml_tensor * src0);
+    void WriteResults();
 
 protected:
     struct ThreadContext
     {
+        int ThreadId = -1;
+        std::vector<int> Activations;
         std::vector<float> Row;
     };
 
     std::vector<std::shared_ptr<ThreadContext>> Contexts;
 
-    std::mutex HistogramLock;
-    int HistogramWidth = -1;
-    std::atomic<uint32_t>* Histogram = nullptr;
+    struct BlockContext
+    {
+        int BlockNumber = -1;
 
-    void RecordRow(int batch, float* row, int count);
-    void PrintHistogram(bool full = false);
+        std::mutex HistogramLock;
+        int HistogramWidth = -1;
+        std::atomic<uint32_t>* Histogram = nullptr;
+
+        ~BlockContext()
+        {
+            delete Histogram;
+        }
+
+        void RecordRow(ThreadContext* ctx, int batch, float* row, int count);
+        void WriteHistogramToFile(const std::string& filename);
+    };
+    std::vector<std::shared_ptr<BlockContext>> Blocks;
 };
-
-CorrelationRecorder::~CorrelationRecorder()
-{
-    PrintHistogram(true);
-    delete Histogram;
-}
 
 static CorrelationRecorder m_CorrelationRecorder;
 
 extern "C" {
+
+void RecordCorrelations_WriteResults()
+{
+    m_CorrelationRecorder.WriteResults();
+}
 
 void RecordCorrelations_MulMat(
     const struct ggml_tensor * src0,
@@ -87,7 +100,7 @@ void RecordCorrelations_MulMat(
         (int)dst->type, dst->name, (int)dst->ne[0], (int)dst->ne[1], (int)dst->ne[2]);
 #endif
 
-    m_CorrelationRecorder.RecordTensor(src1);
+    m_CorrelationRecorder.RecordTensor(block_number, src1);
 }
 
 void RecordCorrelations_Activation(
@@ -105,18 +118,36 @@ void RecordCorrelations_Activation(
         (int)dst->type, dst->name, (int)dst->ne[0], (int)dst->ne[1], (int)dst->ne[2]);
 #endif
 
-    m_CorrelationRecorder.RecordTensor(dst);
+    m_CorrelationRecorder.RecordTensor(block_number, dst);
 #endif
 }
 
 } // extern "C"
 
-void CorrelationRecorder::RecordTensor(const struct ggml_tensor * tensor)
+void CorrelationRecorder::WriteResults()
 {
-    // FIXME: Different context for each block
-    // FIXME: Write the correlation matrix to disk
+    for (auto& block : Blocks)
+    {
+        std::string filename = "correlations_block_";
+        filename += std::to_string(block->BlockNumber);
 
-    //uint64_t t0 = ggml_time_us();
+        block->WriteHistogramToFile(filename);
+    }
+}
+
+void CorrelationRecorder::RecordTensor(int block_number, const struct ggml_tensor * tensor)
+{
+    if (block_number < 0 || block_number > 99) {
+        printf("Ignoring unusual block_number=%d\n", block_number);
+        return;
+    }
+
+    while ((int)Blocks.size() <= block_number) {
+        auto block = std::make_shared<BlockContext>();
+        block->BlockNumber = (int)Blocks.size();
+        Blocks.push_back(block);
+    }
+    auto& block = Blocks[block_number];
 
     int nthread = std::thread::hardware_concurrency() * 2;
 
@@ -129,6 +160,7 @@ void CorrelationRecorder::RecordTensor(const struct ggml_tensor * tensor)
     for (int i = 0; i < nthread; ++i) {
         if (!Contexts[i]) {
             Contexts[i] = std::make_shared<ThreadContext>();
+            Contexts[i]->ThreadId = i;
         }
     }
 
@@ -155,7 +187,7 @@ void CorrelationRecorder::RecordTensor(const struct ggml_tensor * tensor)
         }
         ThreadContext* ctx = Contexts[thr_index].get();
 
-        auto fn = [this, tensor, qtype](ThreadContext* ctx, int start, int count)
+        auto fn = [this, tensor, qtype, &block](ThreadContext* ctx, int start, int count)
         {
             int nelements = tensor->ne[0];
             if ((int)ctx->Row.size() != nelements) {
@@ -175,7 +207,7 @@ void CorrelationRecorder::RecordTensor(const struct ggml_tensor * tensor)
                     qtype.to_float(in_row, out_row, nelements);
                 }
 
-                RecordRow((int)batch_index, out_row, (int)nelements);
+                block->RecordRow(ctx, (int)batch_index, out_row, (int)nelements);
             }
         };
 
@@ -183,20 +215,16 @@ void CorrelationRecorder::RecordTensor(const struct ggml_tensor * tensor)
     }
 
     for (auto & w : workers) { w.join(); }
-
-    //uint64_t t1 = ggml_time_us();
-    //printf("%f msec", (t1 - t0)/100.f);
-
-    //PrintHistogram();
 }
 
-void CorrelationRecorder::RecordRow(int /*batch*/, float* row, int count)
+void CorrelationRecorder::BlockContext::RecordRow(ThreadContext* ctx, int batch, float* row, int count)
 {
-    std::vector<int> activations;
+    auto& activations = ctx->Activations;
+    activations.clear();
 
     for (int i = 0; i < count; ++i) {
         float value = row[i];
-        if (value > -0.5f && value < 0.5f) {
+        if (value > kNegativeThreshold && value < kPositiveThreshold) {
             continue;
         }
 
@@ -217,28 +245,51 @@ void CorrelationRecorder::RecordRow(int /*batch*/, float* row, int count)
     }
 
     const int size = (int)activations.size();
+
     for (int i = 0; i < size; ++i) {
-        const int offset_i = activations[i] * HistogramWidth;
-        for (int j = i; j < size; ++j) { // Start from the current i
-            const int offset_j = activations[j];
-            ++Histogram[offset_i + offset_j];
+        const int ai = activations[i];
+        // Note: activations[] list is sorted.
+        // First  row (ai=0) has 1 element  (offset = 0).
+        // Second row (ai=1) has 2 elements (offset = 1).
+        // Third  row (ai=2) has 3 elements (offset = 3).
+        // Fourth row (ai=3) has 4 elements (offset = 6).
+        int offset = ai * (ai + 1) / 2; // Sum of all the rows before
+
+        for (int j = 0; j < i; ++j) {
+            int index = offset + activations[j];
+
+            ++Histogram[index];
         }
     }
 }
 
-void CorrelationRecorder::PrintHistogram(bool full)
+void CorrelationRecorder::BlockContext::WriteHistogramToFile(const std::string& filename)
 {
+    uint64_t t0 = ggml_time_us();
+
+    std::lock_guard<std::mutex> locker(HistogramLock);
+
     if (!Histogram) {
+        printf("No data to write\n");
         return;
     }
 
-    printf("\n");
-    for (int i = 0; i < HistogramWidth && i < 64; ++i) {
-        printf("%d ", (int)Histogram[i]); 
+    // Open a file in binary mode
+    std::ofstream file(filename, std::ios::binary);
+    if (!file.is_open()) {
+        throw std::runtime_error("Unable to open file");
     }
-    printf("\n");
 
-    if (!full) {
-        return;
+    const uint32_t width = static_cast<uint32_t>( HistogramWidth );
+    file.write(reinterpret_cast<const char*>(&width), sizeof(width));
+
+    // Write the elements of the array
+    const int elements = static_cast<int>( HistogramWidth * (HistogramWidth + 1) / 2 );
+    for (int i = 0; i < elements; ++i) {
+        const uint32_t value = Histogram[i].load(); // Convert std::atomic to uint32_t
+        file.write(reinterpret_cast<const char*>(&value), sizeof(value));
     }
+
+    uint64_t t1 = ggml_time_us();
+    printf("Wrote %d element triangular correlation matrix in %f msec\n", elements, (t1 - t0)/1000.f);
 }

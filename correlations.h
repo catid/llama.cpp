@@ -21,6 +21,8 @@ void RecordCorrelations_Activation(
     const struct ggml_tensor * src0,
             struct ggml_tensor * dst);
 
+void RecordCorrelations_WriteResults();
+
 #ifdef __cplusplus
 } // extern "C"
 #endif

@@ -793,6 +793,11 @@ bool gpt_params_parse_ex(int argc, char ** argv, gpt_params & params) {
         params.kv_overrides.back().key[0] = 0;
     }
 
+#ifdef ENABLE_CORRELATIONS
+    printf("Forcing n_thread = 1 for correlation calculations");
+    params.n_threads = 1;
+#endif // ENABLE_CORRELATIONS
+
     return true;
 }
 
@@ -880,6 +885,7 @@ void gpt_print_usage(int /*argc*/, char ** argv, const gpt_params & params) {
     printf("  --keep N              number of tokens to keep from the initial prompt (default: %d, -1 = all)\n", params.n_keep);
     printf("  --draft N             number of tokens to draft for speculative decoding (default: %d)\n", params.n_draft);
     printf("  --chunks N            max number of chunks to process (default: %d, -1 = all)\n", params.n_chunks);
+    printf("  --chunk-start N       first chunk to process (default: 0)\n");
     printf("  -np N, --parallel N   number of parallel sequences to decode (default: %d)\n", params.n_parallel);
     printf("  -ns N, --sequences N  number of sequences to decode (default: %d)\n", params.n_sequences);
     printf("  -pa N, --p-accept N   speculative decoding accept probability (default: %.1f)\n", (double)params.p_accept);
