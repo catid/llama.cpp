@@ -5,7 +5,7 @@ import shutil
 import re
 
 app_path = "/home/catid/sources/llama.cpp"
-max_threads=24
+nthreads = 24
 
 def read_node_addresses(filename="servers.txt"):
     with open(filename, 'r') as f:
@@ -16,62 +16,36 @@ def verify_and_process_files(file1, file2):
     if os.path.basename(file1) != os.path.basename(file2):
         raise ValueError("File names do not match")
 
-    # Check file sizes and first 4 bytes
-    if not verify_files(file1, file2):
-        raise ValueError("Files do not meet verification criteria")
-
     print(f"Accumulating {file1} += {file2}")
 
-    # Process files in blocks
-    process_in_blocks(file1, file2)
+    try:
+        # Construct the command
+        command = f"{app_path}/build/bin/sum_correlations {file1} {file2}"
 
-def verify_files(file1, file2):
-    with open(file1, 'rb') as f1, open(file2, 'rb') as f2:
-        first4_f1 = f1.read(4)
-        first4_f2 = f2.read(4)
+        # Run the command
+        result = subprocess.run(command, shell=True, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
-        f1.seek(0, 2)  # Move to end of file
-        f2.seek(0, 2)
-        size_f1 = f1.tell()
-        size_f2 = f2.tell()
+    except subprocess.CalledProcessError as e:
+        # Handle the case where the command failed
+        print(f"Command failed with exit code {e.returncode}")
+        print("Error message:", e.stderr.decode())
+        raise ValueError("Summation failed")
 
-        return (size_f1 == size_f2) and (first4_f1 == first4_f2)
-
-def process_block(file1, file2, start, end):
-    with open(file1, 'r+b') as f1, open(file2, 'rb') as f2:
-        f1.seek(start)
-        f2.seek(start)
-        while start < end:
-            data1 = struct.unpack('I', f1.read(4))[0]
-            data2 = struct.unpack('I', f2.read(4))[0]
-            f1.seek(start)
-            f1.write(struct.pack('I', data1 + data2))
-            start += 4
-
-def process_in_blocks(file1, file2):
-    block_size = 1024 * 4  # 1024 32-bit values
+def process_files_in_threads(out_files, work_files):
     threads = []
-    start = 4  # Skip the first 4 bytes
+    for i in range(0, len(out_files)):
+        if i < len(work_files):  # Ensuring there's a corresponding file in work_files
+            thread = threading.Thread(target=verify_and_process_files, args=(out_files[i], work_files[i]))
+            threads.append(thread)
+            thread.start()
 
-    with open(file1, 'rb') as f:
-        f.seek(0, 2)  # Move to end of file
-        size = f.tell()
+            # If we have 24 active threads, wait for them to complete before starting more
+            if len(threads) >= nthreads:
+                for t in threads:
+                    t.join()
+                threads = []  # Reset the list for the next batch of threads
 
-    while start < size:
-        end = min(start + block_size, size)
-        thread = threading.Thread(target=process_block, args=(file1, file2, start, end))
-        threads.append(thread)
-        thread.start()
-
-        start += block_size
-
-        # Limit to 16 threads at a time
-        if len(threads) >= max_threads:
-            for t in threads:
-                t.join()
-            threads = []
-
-    # Wait for any remaining threads to finish
+    # Wait for any remaining threads to complete
     for t in threads:
         t.join()
 
@@ -111,9 +85,7 @@ def main():
         if len(work_files) != len(out_files):
             raise ValueError("Some files are missing")
 
-        for i in range(0, len(out_files), 2):
-            print(f"Processing block {i}...")
-            verify_and_process_files(out_files[i], work_files[i])
+        process_files_in_threads(out_files, work_files)
 
 if __name__ == "__main__":
     main()
