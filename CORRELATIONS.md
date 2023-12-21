@@ -5,6 +5,7 @@ A Neuron is one activation path through the Feed Forward Network of a Transforme
 To enable the experimental features, build with -DLLAMA_CORRELATIONS=ON:
 
 ```bash
+# All nodes are going to need these dependencies
 sudo apt install git cmake libzstd-dev pdsh
 
 git clone https://github.com/catid/llama.cpp

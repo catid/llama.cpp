@@ -142,7 +142,7 @@ void CorrelationRecorder::WriteResults()
     {
         std::string filename = "correlations_block_";
         filename += std::to_string(block->BlockNumber);
-        filename += ".bin";
+        filename += ".zstd";
 
         block->WriteHistogramToFile(filename);
     }
