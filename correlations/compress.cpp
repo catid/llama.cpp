@@ -6,6 +6,8 @@
 #include <functional>
 #include <stdexcept>
 #include <cstring>
+#include <iostream>
+using namespace std;
 
 
 //------------------------------------------------------------------------------
@@ -191,28 +193,35 @@ bool CorrelationMatrix_UnitTest()
     }
 
     if (!WriteCorrelationMatrix(matrix_data, matrix_width, block_number, file_path)) {
+        cerr << "WriteCorrelationMatrix failed" << endl;
         return false;
     }
 
     CorrelationMatrix m;
     if (!m.ReadFile(file_path)) {
+        cerr << "ReadFile failed" << endl;
         return false;
     }
 
     if (m.BlockNumber != block_number) {
+        cerr << "Wrong BlockNumber" << endl;
         return false;
     }
     if (m.MatrixWidth != matrix_width) {
+        cerr << "Wrong MatrixWidth" << endl;
         return false;
     }
     if (m.WordCount != elements) {
+        cerr << "Wrong WordCount" << endl;
         return false;
     }
     for (int i = 0; i < elements; ++i) {
         if (m.Data[i] != elements + i) {
+            cerr << "Data corrupted at " << i << endl;
             return false;
         }
     }
 
+    cout << "CorrelationMatrix unit test passed" << endl;
     return true;
 }

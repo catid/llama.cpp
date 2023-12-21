@@ -689,6 +689,12 @@ static void hellaswag_score(llama_context * ctx, const gpt_params & params) {
 }
 
 int main(int argc, char ** argv) {
+#ifdef ENABLE_CORRELATIONS
+    if (0 != RecordCorrelations_SelfTest()) {
+        return -1;
+    }
+#endif // ENABLE_CORRELATIONS
+
     gpt_params params;
 
     params.n_batch = 512;
