@@ -7,7 +7,7 @@
 static const uint32_t kCorrelationFileHead = 0xca7dca7d;
 
 bool WriteCorrelationMatrix(
-    std::atomic<uint32_t>* matrix_data,
+    const uint32_t* matrix_data,
     int matrix_width,
     int block_number,
     const std::string& file_path);
@@ -23,7 +23,8 @@ public:
     uint32_t* Data = nullptr;
 
     bool ReadFile(const std::string& file_path);
-    bool Accumulate(const CorrelationMatrix& other);
+    void Accumulate(const CorrelationMatrix& other);
+    bool WriteFile(const std::string& file_path);
 };
 
 // Write out some randomized data and read it back in to verify the code works

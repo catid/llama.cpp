@@ -287,7 +287,11 @@ void CorrelationRecorder::BlockContext::WriteHistogramToFile(const std::string& 
         return;
     }
 
-    if (!WriteCorrelationMatrix(Histogram, HistogramWidth, BlockNumber, filename)) {
+    if (sizeof(std::atomic<uint32_t>) != 4) {
+        throw std::runtime_error("FIXME: Need to implement intermediate conversion here on this arch");
+    }
+
+    if (!WriteCorrelationMatrix((uint32_t*)Histogram, HistogramWidth, BlockNumber, filename)) {
         throw std::runtime_error("Failed to write matrix to file");
     }
 

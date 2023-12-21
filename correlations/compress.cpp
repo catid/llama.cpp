@@ -4,9 +4,9 @@
 #include <zstd.h>
 
 #include <functional>
-#include <stdexcept>
 #include <cstring>
 #include <iostream>
+#include <vector>
 using namespace std;
 
 
@@ -61,17 +61,11 @@ static void SIMDSafeFree(void* ptr)
 // CorrelationMatrix
 
 bool WriteCorrelationMatrix(
-    std::atomic<uint32_t>* matrix_data,
+    const uint32_t* matrix_data,
     int matrix_width,
     int block_number,
     const std::string& file_path)
 {
-    if (sizeof(std::atomic<uint32_t>) != 4) {
-        throw std::runtime_error("FIXME: Need to implement intermediate conversion here on this arch");
-        return false;
-    }
-
-    void* src_data = (void*)matrix_data;
     int src_bytes = 4 * matrix_width * (matrix_width + 1) / 2;
 
     const int compressed_max = ZSTD_compressBound(src_bytes);
@@ -83,7 +77,7 @@ bool WriteCorrelationMatrix(
     const size_t compressed_size = ZSTD_compress(
         compressed,
         compressed_max,
-        src_data,
+        matrix_data,
         src_bytes,
         1/*level*/);
     if (ZSTD_isError(compressed_size)) {
@@ -166,7 +160,7 @@ bool CorrelationMatrix::ReadFile(const std::string& file_path)
     return true;
 }
 
-bool CorrelationMatrix::Accumulate(const CorrelationMatrix& other)
+void CorrelationMatrix::Accumulate(const CorrelationMatrix& other)
 {
     const uint32_t* src = other.Data;
     uint32_t* dst = Data;
@@ -175,6 +169,15 @@ bool CorrelationMatrix::Accumulate(const CorrelationMatrix& other)
     for (int i = 0; i < words; ++i) {
         dst[i] += src[i];
     }
+}
+
+bool CorrelationMatrix::WriteFile(const std::string& file_path)
+{
+    if (!Data) {
+        return false;
+    }
+
+    return WriteCorrelationMatrix(Data, MatrixWidth, BlockNumber, file_path);
 }
 
 bool CorrelationMatrix_UnitTest()
@@ -186,13 +189,18 @@ bool CorrelationMatrix_UnitTest()
     std::string file_path = "test.zstd";
 
     int elements = matrix_width * (matrix_width + 1) / 2;
-    std::atomic<uint32_t>* matrix_data = new std::atomic<uint32_t>[elements];
+    std::vector<uint32_t> matrix_data(elements);
 
     for (int i = 0; i < elements; ++i) {
         matrix_data[i] = elements + i;
     }
 
-    if (!WriteCorrelationMatrix(matrix_data, matrix_width, block_number, file_path)) {
+    if (sizeof(std::atomic<uint32_t>) != 4) {
+        throw std::runtime_error("FIXME: Need to implement intermediate conversion here on this arch");
+        return false;
+    }
+
+    if (!WriteCorrelationMatrix(matrix_data.data(), matrix_width, block_number, file_path)) {
         cerr << "WriteCorrelationMatrix failed" << endl;
         return false;
     }
