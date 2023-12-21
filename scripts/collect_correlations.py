@@ -3,6 +3,7 @@ import threading
 import struct
 import shutil
 import re
+import subprocess
 
 app_path = "/home/catid/sources/llama.cpp"
 nthreads = 24
@@ -57,6 +58,10 @@ def main():
     username = 'your_username'
     workspace = './workspace/'
     outputs_dir = './outputs/'
+
+    if os.path.exists(outputs_dir):
+        print(f"Before starting a new collection, you must manually delete the {outputs_dir} folder.  This is required to avoid losing data by accident.")
+        return
 
     os.makedirs(outputs_dir, exist_ok=True)
 
