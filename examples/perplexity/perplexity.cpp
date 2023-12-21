@@ -1,5 +1,6 @@
 #include "common.h"
 #include "llama.h"
+#include "correlations.h"
 
 #include <cmath>
 #include <cstdio>
@@ -755,6 +756,8 @@ int main(int argc, char ** argv) {
     llama_free_model(model);
 
     llama_backend_free();
+
+    RecordCorrelations_WriteResults();
 
     return 0;
 }
