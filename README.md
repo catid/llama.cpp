@@ -1,6 +1,6 @@
 This is a fork of `llama.cpp` to study neuron activation correlations.
 
-Documentation for this project is in the `CORRELATIONS.md` file.
+Documentation for this project is in the [CORRELATIONS.md](./CORRELATIONS.md) file.
 
 # llama.cpp
 
