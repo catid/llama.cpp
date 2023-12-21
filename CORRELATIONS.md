@@ -5,7 +5,7 @@ A Neuron is one activation path through the Feed Forward Network of a Transforme
 To enable the experimental features, build with -DLLAMA_CORRELATIONS=ON:
 
 ```bash
-sudo apt install git cmake libzstd-dev
+sudo apt install git cmake libzstd-dev pdsh
 
 git clone https://github.com/catid/llama.cpp
 cd llama.cpp
@@ -99,6 +99,12 @@ python scripts/collect_correlations.py
 ```
 
 This script will create a `workspace` and `outputs` folders.  Files from other machines from `servers.txt` are copied into the `workspace`, and added to the `outputs` files using the built `./build/bin/sum_correlations` C++ application for speed.
+
+After all the data is collected, you can delete the intermediate results from all disks by running:
+
+```bash
+python scripts/delete_correlations.py
+```
 
 Finally you can produce pretty correlation graphs by running:
 

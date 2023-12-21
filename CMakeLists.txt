@@ -358,8 +358,16 @@ if (LLAMA_CLBLAST)
 endif()
 
 if (LLAMA_CORRELATIONS)
-    set(GGML_SOURCES_EXTRA ${GGML_SOURCES_EXTRA} correlations/correlations.cpp correlations/compress.cpp)
-    set(GGML_HEADERS_EXTRA ${GGML_HEADERS_EXTRA} correlations/correlations.h correlations/compress.hpp)
+    set(GGML_SOURCES_EXTRA ${GGML_SOURCES_EXTRA}
+        correlations/correlations.cpp
+        correlations/compress.cpp
+        correlations/mmapfile.cpp
+    )
+    set(GGML_HEADERS_EXTRA ${GGML_HEADERS_EXTRA}
+        correlations/correlations.h
+        correlations/compress.hpp
+        correlations/mmapfile.hpp
+    )
     set(LLAMA_EXTRA_LIBS ${LLAMA_EXTRA_LIBS} zstd)
 
     add_compile_definitions(ENABLE_CORRELATIONS)
