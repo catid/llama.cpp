@@ -358,8 +358,8 @@ if (LLAMA_CLBLAST)
 endif()
 
 if (LLAMA_CORRELATIONS)
-    set(GGML_SOURCES_EXTRA ${GGML_SOURCES_EXTRA} correlations.cpp)
-    set(GGML_HEADERS_EXTRA ${GGML_HEADERS_EXTRA} correlations.h)
+    set(GGML_SOURCES_EXTRA ${GGML_SOURCES_EXTRA} correlations/correlations.cpp)
+    set(GGML_HEADERS_EXTRA ${GGML_HEADERS_EXTRA} correlations/correlations.h)
 
     add_compile_definitions(ENABLE_CORRELATIONS)
 endif()

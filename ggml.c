@@ -38,7 +38,7 @@
 #pragma warning(disable: 4996)
 #endif
 
-#include "correlations.h"
+#include "correlations/correlations.h"
 
 #if defined(_WIN32)
 

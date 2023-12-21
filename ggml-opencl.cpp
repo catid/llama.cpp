@@ -1838,7 +1838,7 @@ static bool ggml_cl_mul_mat_use_f16(const struct ggml_tensor * src0, const struc
     return mul_mat_f16_transfer < mul_mat_q_transfer;
 }
 
-#include "correlations.h"
+#include "correlations/correlations.h"
 
 void ggml_cl_mul_mat(const struct ggml_tensor * src0, const struct ggml_tensor * src1, struct ggml_tensor * dst, void * wdata, size_t wsize) {
     GGML_ASSERT(ggml_cl_can_mul_mat(src0, src1, dst));

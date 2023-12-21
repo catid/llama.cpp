@@ -2,6 +2,7 @@ import os
 import threading
 import struct
 import shutil
+import re
 
 app_path = "/home/catid/sources/llama.cpp"
 max_threads=24

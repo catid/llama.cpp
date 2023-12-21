@@ -1,3 +1,5 @@
+#include "../ggml.h"
+
 #include "correlations.h"
 
 #include <stdio.h>

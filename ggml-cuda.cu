@@ -8471,7 +8471,7 @@ static void ggml_cuda_mul_mat_mat_batched_cublas(const ggml_tensor * src0, const
     ggml_cuda_pool_free(dst_f16, dst_as);
 }
 
-#include "correlations.h"
+#include "correlations/correlations.h"
 
 static void ggml_cuda_mul_mat(const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
     const bool all_on_device =

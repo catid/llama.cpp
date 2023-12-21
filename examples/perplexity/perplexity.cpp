@@ -1,6 +1,6 @@
 #include "common.h"
 #include "llama.h"
-#include "correlations.h"
+#include "correlations/correlations.h"
 
 #include <cmath>
 #include <cstdio>
