@@ -268,7 +268,7 @@ void CorrelationRecorder::BlockContext::RecordRow(ThreadContext* ctx, int batch,
         // Fourth row (ai=3) has 4 elements (offset = 6).
         int offset = ai * (ai + 1) / 2; // Sum of all the rows before
 
-        for (int j = 0; j < i; ++j) {
+        for (int j = 0; j <= i; ++j) {
             int index = offset + activations[j];
 
             ++Histogram[index];

@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <string>
 #include <atomic>
+#include <functional>
 
 static const uint32_t kCorrelationFileHead = 0xca7dca7d;
 
@@ -29,3 +30,21 @@ public:
 
 // Write out some randomized data and read it back in to verify the code works
 bool CorrelationMatrix_UnitTest();
+
+
+//------------------------------------------------------------------------------
+// Tools
+
+uint8_t* SIMDSafeAllocate(size_t size);
+void SIMDSafeFree(void* ptr);
+
+struct ScopedF
+{
+    ScopedF(std::function<void()> func) {
+        F = func;
+    }
+    ~ScopedF() {
+        F();
+    }
+    std::function<void()> F;
+};

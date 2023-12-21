@@ -3,7 +3,6 @@
 
 #include <zstd.h>
 
-#include <functional>
 #include <cstring>
 #include <iostream>
 #include <vector>
@@ -11,26 +10,11 @@ using namespace std;
 
 
 //------------------------------------------------------------------------------
-// Tools
-
-struct ScopedF
-{
-    ScopedF(std::function<void()> func) {
-        F = func;
-    }
-    ~ScopedF() {
-        F();
-    }
-    std::function<void()> F;
-};
-
-
-//------------------------------------------------------------------------------
 // SIMD-Safe Aligned Memory Allocations
 
 static const unsigned kSimdAlignmentBytes = 32;
 
-static uint8_t* SIMDSafeAllocate(size_t size)
+uint8_t* SIMDSafeAllocate(size_t size)
 {
     uint8_t* data = (uint8_t*)malloc(kSimdAlignmentBytes + size);
     if (!data) {
@@ -42,7 +26,7 @@ static uint8_t* SIMDSafeAllocate(size_t size)
     return data;
 }
 
-static void SIMDSafeFree(void* ptr)
+void SIMDSafeFree(void* ptr)
 {
     if (!ptr) {
         return;

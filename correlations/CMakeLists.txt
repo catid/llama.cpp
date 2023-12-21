@@ -27,6 +27,8 @@ else()
     set(CMAKE_CXX_FLAGS_RELEASE "-O3 -march=native")
 endif()
 
+find_package(OpenCV REQUIRED)
+
 # study_correlations
 
 add_executable(study_correlations
@@ -36,7 +38,7 @@ add_executable(study_correlations
     compress.cpp
     compress.hpp
 )
-target_link_libraries(study_correlations PUBLIC zstd)
+target_link_libraries(study_correlations PUBLIC zstd ${OpenCV_LIBS})
 
 # sum_correlations
 
