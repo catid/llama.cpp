@@ -114,6 +114,58 @@ void GenerateHeatmap(CorrelationMatrix& m)
     });
 
     for (int i = 0; i < width; ++i) {
+        double mean = 0.0;
+        double sum = 0.0;
+        const double inv_max = 1.0 / (double)value_max;
+
+        // For each row:
+        int i_offset = i * (i + 1) / 2;
+        for (int j = 0; j <= i; ++j) {
+            uint32_t value = m.Data[i_offset + j];
+            double norm_value = value * inv_max;
+
+            mean += j * norm_value;
+            sum += norm_value;
+        }
+        for (int j = i+1; j < width; ++j) {
+            int j_offset = j * (j + 1) / 2;
+            uint32_t value = m.Data[j_offset + i];
+            double norm_value = value * inv_max;
+
+            mean += j * norm_value;
+            sum += norm_value;
+        }
+
+        mean /= sum;
+        sum = 0.0;
+
+        // For each row:
+        for (int j = 0; j <= i; ++j) {
+            uint32_t value = m.Data[i_offset + j];
+            double norm_value = value * inv_max;
+
+            double pow2 = j - mean;
+            pow2 *= pow2;
+
+            sum += norm_value * pow2;
+        }
+        for (int j = i+1; j < width; ++j) {
+            int j_offset = j * (j + 1) / 2;
+            uint32_t value = m.Data[j_offset + i];
+            double norm_value = value * inv_max;
+
+            double pow2 = j - mean;
+            pow2 *= pow2;
+
+            mean += norm_value * pow2;
+        }
+
+        double stddev = std::sqrt(sum);
+
+        // FIXME: cov
+    }
+
+    for (int i = 0; i < width; ++i) {
         int offset = i * (i + 1) / 2;
 
         uint32_t diag_value = m.Data[offset];
@@ -124,7 +176,7 @@ void GenerateHeatmap(CorrelationMatrix& m)
             if (diag_value < cutoff) {
                 int value = m.Data[offset + j];
                 if (value > 0) {
-                    double norm_value = log(value) / (double)log(cutoff);
+                    double norm_value = log(value) / (double)log(diag_value);
 
                     heat = norm_value * 255.0;
                     if (heat < 0) {
