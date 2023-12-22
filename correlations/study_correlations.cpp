@@ -7,7 +7,7 @@
 #include <algorithm>
 using namespace std;
 
-void GenerateHeatmap(CorrelationMatrix& m)
+static void GenerateHeatmap(CorrelationMatrix& m)
 {
     // Calculate basic statistics for e.g. normalization factors
 
@@ -103,99 +103,102 @@ void GenerateHeatmap(CorrelationMatrix& m)
 
     cv::imwrite(hist_filename, hist_image);
 
-    // Generate heatmap
+    // Correlation matrix calculation
 
-    // There is a set of neurons that are very active and not correlated
-    const int cutoff = value_max / 20;
+    // Note: The matrix is symmetric, so row stats are the same as column stats
+    std::vector<double> StdDevs(width), Means(width);
 
-    uint8_t* heatmap = SIMDSafeAllocate(width * width);
-    ScopedF heatmap_scope([&]() {
-        SIMDSafeFree(heatmap);
-    });
+    double norm_factor = 1.0 / value_max;
 
     for (int i = 0; i < width; ++i) {
-        double mean = 0.0;
-        double sum = 0.0;
-        const double inv_max = 1.0 / (double)value_max;
+        // Calculate mean of row:
+
+        uint64_t sum_values = 0;
 
         // For each row:
         int i_offset = i * (i + 1) / 2;
         for (int j = 0; j <= i; ++j) {
-            uint32_t value = m.Data[i_offset + j];
-            double norm_value = value * inv_max;
-
-            mean += j * norm_value;
-            sum += norm_value;
+            sum_values += m.Data[i_offset + j];
         }
         for (int j = i+1; j < width; ++j) {
             int j_offset = j * (j + 1) / 2;
-            uint32_t value = m.Data[j_offset + i];
-            double norm_value = value * inv_max;
-
-            mean += j * norm_value;
-            sum += norm_value;
+            sum_values += m.Data[j_offset + i];
         }
 
-        mean /= sum;
-        sum = 0.0;
+        double mean = sum_values / (double)width * norm_factor;
+        Means[i] = mean;
+
+        // Calculate standard deviation of row:
+
+        double sum_sd = 0.0;
 
         // For each row:
         for (int j = 0; j <= i; ++j) {
             uint32_t value = m.Data[i_offset + j];
-            double norm_value = value * inv_max;
-
-            double pow2 = j - mean;
-            pow2 *= pow2;
-
-            sum += norm_value * pow2;
+            double diff = value * norm_factor - mean;
+            sum_sd += diff * diff;
         }
         for (int j = i+1; j < width; ++j) {
             int j_offset = j * (j + 1) / 2;
             uint32_t value = m.Data[j_offset + i];
-            double norm_value = value * inv_max;
-
-            double pow2 = j - mean;
-            pow2 *= pow2;
-
-            mean += norm_value * pow2;
+            double diff = value * norm_factor - mean;
+            sum_sd += diff * diff;
         }
 
-        double stddev = std::sqrt(sum);
-
-        // FIXME: cov
+        StdDevs[i] = std::sqrt(sum_sd);
     }
 
-    for (int i = 0; i < width; ++i) {
+
+    // Generate heatmap
+
+    uint8_t* heatmap = SIMDSafeAllocate(width * width * 3);
+    ScopedF heatmap_scope([&]() {
+        SIMDSafeFree(heatmap);
+    });
+
+    for (int i = 0; i < width; ++i)
+    {
         int offset = i * (i + 1) / 2;
 
-        uint32_t diag_value = m.Data[offset];
+        for (int j = 0; j <= i; ++j)
+        {
+            double norm_value = m.Data[offset + j] * norm_factor;
+            double cov_ij = (norm_value - Means[i]) * (norm_value - Means[j]);
+            double r = cov_ij / (StdDevs[i] * StdDevs[j]);
 
-        for (int j = 0; j <= i; ++j) {
-            int heat = 0;
+            int heat = r * 255.0;
 
-            if (diag_value < cutoff) {
-                int value = m.Data[offset + j];
-                if (value > 0) {
-                    double norm_value = log(value) / (double)log(diag_value);
-
-                    heat = norm_value * 255.0;
-                    if (heat < 0) {
-                        heat = 0;
-                    }
-                    if (heat > 255) {
-                        heat = 255;
-                    }
+            int offset_ij = i * width + j;
+            int offset_ji = j * width + i;
+            if (heat >= 0) {
+                if (heat > 255) {
+                    heat = 255;
                 }
+                heatmap[offset_ij * 3 + 0] = (uint8_t)heat;
+                heatmap[offset_ij * 3 + 1] = (uint8_t)heat;
+                heatmap[offset_ij * 3 + 2] = (uint8_t)heat;
+                heatmap[offset_ji * 3 + 0] = (uint8_t)heat;
+                heatmap[offset_ji * 3 + 1] = (uint8_t)heat;
+                heatmap[offset_ji * 3 + 2] = (uint8_t)heat;
             }
-
-            heatmap[i * width + j] = (uint8_t)heat;
-            heatmap[j * width + i] = (uint8_t)heat;
+            else if (heat < 0) {
+                heat = -heat;
+                if (heat > 255) {
+                    heat = 255;
+                }
+                heatmap[offset_ij * 3 + 0] = 0;
+                heatmap[offset_ij * 3 + 1] = (uint8_t)heat;
+                heatmap[offset_ij * 3 + 2] = 0;
+                heatmap[offset_ji * 3 + 0] = 0;
+                heatmap[offset_ji * 3 + 1] = (uint8_t)heat;
+                heatmap[offset_ji * 3 + 2] = 0;
+            }
         }
     }
 
     // Store as a PNG image
 
-    cv::Mat heatmap_image(width, width, CV_8UC1, (void*)heatmap);
+    cv::Mat heatmap_image(width, width, CV_8UC3, (void*)heatmap);
 
     std::string heatmap_filename = "heatmap_block_";
     heatmap_filename += std::to_string(m.BlockNumber);
