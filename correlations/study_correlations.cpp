@@ -103,7 +103,13 @@ static void GenerateHeatmap(CorrelationMatrix& m)
 
     cv::imwrite(hist_filename, hist_image);
 
+
     // Correlation matrix calculation
+
+    float* correlation_matrix = (float*)SIMDSafeAllocate(m.WordCount * sizeof(float));
+    ScopedF corr_scope([&]() {
+        SIMDSafeFree(correlation_matrix);
+    });
 
     // Note: The matrix is symmetric, so row stats are the same as column stats
     std::vector<double> StdDevs(width), Means(width);
@@ -148,6 +154,27 @@ static void GenerateHeatmap(CorrelationMatrix& m)
         StdDevs[i] = std::sqrt(sum_sd);
     }
 
+    double largest_r = 0.0;
+
+    for (int i = 0; i < width; ++i)
+    {
+        int offset = i * (i + 1) / 2;
+
+        for (int j = 0; j <= i; ++j)
+        {
+            double norm_value = m.Data[offset + j] * norm_factor;
+            double cov_ij = (norm_value - Means[i]) * (norm_value - Means[j]);
+            double r = cov_ij / (StdDevs[i] * StdDevs[j]);
+            if (largest_r < r) {
+                largest_r = r;
+            }
+
+            correlation_matrix[offset + j] = (float)r;
+        }
+    }
+
+    double r_norm_factor = 1.0 / largest_r;
+
 
     // Generate heatmap
 
@@ -162,9 +189,7 @@ static void GenerateHeatmap(CorrelationMatrix& m)
 
         for (int j = 0; j <= i; ++j)
         {
-            double norm_value = m.Data[offset + j] * norm_factor;
-            double cov_ij = (norm_value - Means[i]) * (norm_value - Means[j]);
-            double r = cov_ij / (StdDevs[i] * StdDevs[j]);
+            double r = correlation_matrix[offset + j] * r_norm_factor;
 
             int heat = r * 255.0;
 
