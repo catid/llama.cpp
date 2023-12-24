@@ -37,7 +37,22 @@ public:
     int BlockNumber = -1;
     int MatrixWidth = -1;
     int WordCount = -1;
+
+    // Lower triangle + diagonal, row-first in memory.
     uint32_t* Data = nullptr;
+
+    uint32_t Get(int i/*row*/, int j/*column*/)
+    {
+        // Ensure j <= i to avoid reading outside the lower triangle.
+        if (j > i) {
+            int t = j;
+            j = i;
+            i = t;
+        }
+
+        int row_offset = i * (i + 1) / 2;
+        return Data[row_offset + j];
+    }
 
     bool ReadFile(const std::string& file_path);
     void Accumulate(const CorrelationMatrix& other);
