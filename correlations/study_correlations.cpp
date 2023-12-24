@@ -37,9 +37,7 @@ public:
     {
         // Ensure j <= i to avoid reading outside the lower triangle.
         if (j > i) {
-            int t = j;
-            j = i;
-            i = t;
+            std::swap(j, i);
         }
 
         int row_offset = i * (i + 1) / 2;
@@ -137,7 +135,7 @@ struct SAParams
 {
     int max_negative_dist = 32;
     int log2_max_move = 8;
-    int max_epochs = 1000;
+    int max_epochs = 100;
 };
 
 static double ScoreOrder(std::vector<int>& Indices, Correlation& corr, const SAParams& params)
@@ -152,23 +150,20 @@ static double ScoreOrder(std::vector<int>& Indices, Correlation& corr, const SAP
         {
             // Get correlation matrix entry for transformed indices,
             // which does not change the correlation matrix values but just re-orders them.
+            // These are guaranteed to be unique.
             const int row_i = Indices[i];
             const int col_j = Indices[j];
-
-            if (row_i == col_j) {
-                continue;
-            }
 
             double r = corr.Get(row_i, col_j);
 
             // distance from diagonal
             int d = i - j;
-
+#if 0
             // Only negative correlations close to the column should be penalized
             if (r < 0.0 && d > params.max_negative_dist) {
                 continue;
             }
-
+#endif
             score += r / d;
         }
     }
@@ -198,12 +193,12 @@ static double GetRightScore(int i, std::vector<int>& Indices, Correlation& corr,
         }
 
         const double r = corr.Get(row_i, col_j);
-
+#if 0
         // Only negative correlations close to the column should be penalized
         if (r < 0.0 && std::abs(i - j) > params.max_negative_dist) {
             continue;
         }
-
+#endif
         if (j > i) {
             score += r;
         } else {
@@ -325,7 +320,7 @@ static void RCMOrder(Correlation& corr, std::vector<int>& Indices)
 
     std::vector<int> top_indices;
 
-    const int k = 64;
+    const int k = 1024;
     const int start_index = 8000;
 
     const int width = corr.Width;
@@ -468,18 +463,48 @@ static void GenerateNeuronHistogram(CorrelationMatrix& m)
 
 static void GenerateHeatmap(CorrelationMatrix& m)
 {
+    const int width = m.MatrixWidth;
+
     Correlation corr;
     corr.Calculate(m);
 
+    uint64_t diag0 = 0, diag1 = 0;
+    int count0 = 0, count1 = 0;
+
+    for (int i = 0; i < width; ++i) {
+        int positive = 0;
+        for (int j = 0; j < width; ++j) {
+            if (i == j) {
+                continue;
+            }
+            double r = corr.Get(i, j);
+            if (r > 0) {
+                positive++;
+            } else {
+                positive--;
+            }
+        }
+
+        if (positive < 0) {
+            cout << "Neuron " << i << " Sr<0: diag=" << m.Get(i, i) << endl;
+            diag0 += m.Get(i, i);
+            ++count0;
+        } else {
+            diag1 += m.Get(i, i);
+            ++count1;
+        }
+    }
+    cout << "diag0 = " << diag0 << " count0=" << count0 << " avg0=" << diag0 / count0 << endl;
+    cout << "diag1 = " << diag1 << " count1=" << count1 << " avg1=" << diag1 / count1 << endl;
+
     std::vector<int> Indices;
+    //RCMOrder(corr, Indices);
+
     SAParams sa_params;
     SimulatedAnnealing(corr, Indices, sa_params);
 
-    //RCMOrder(corr, Indices);
-
     // Generate heatmap
 
-    const int width = m.MatrixWidth;
     uint8_t* heatmap = SIMDSafeAllocate(width * width * 3);
     ScopedF heatmap_scope([&]() {
         SIMDSafeFree(heatmap);
@@ -487,14 +512,15 @@ static void GenerateHeatmap(CorrelationMatrix& m)
 
     for (int i = 0; i < width; ++i)
     {
-        int offset = i * (i + 1) / 2;
-
         // Amplify all the correlations a lot since most are pretty small
         double r_norm_factor = width / 2;
 
         for (int j = 0; j <= i; ++j)
         {
-            double r = corr.RMatrix[offset + j] * r_norm_factor;
+            const int row_i = Indices[i];
+            const int row_j = Indices[j];
+
+            double r = corr.Get(row_i, row_j) * r_norm_factor;
 
             int heat = r * 255.0;
 

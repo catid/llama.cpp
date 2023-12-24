@@ -45,9 +45,7 @@ public:
     {
         // Ensure j <= i to avoid reading outside the lower triangle.
         if (j > i) {
-            int t = j;
-            j = i;
-            i = t;
+            std::swap(j, i);
         }
 
         int row_offset = i * (i + 1) / 2;
