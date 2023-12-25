@@ -66,6 +66,8 @@ protected:
         int HistogramWidth = -1;
         std::atomic<uint32_t>* Histogram = nullptr;
 
+        std::atomic<uint64_t> TotalTrials = ATOMIC_VAR_INIT(0);
+
         ~BlockContext()
         {
             delete Histogram;
@@ -274,6 +276,8 @@ void CorrelationRecorder::BlockContext::RecordRow(ThreadContext* ctx, int batch,
             ++Histogram[index];
         }
     }
+
+    ++TotalTrials;
 }
 
 void CorrelationRecorder::BlockContext::WriteHistogramToFile(const std::string& filename)
@@ -291,7 +295,7 @@ void CorrelationRecorder::BlockContext::WriteHistogramToFile(const std::string& 
         throw std::runtime_error("FIXME: Need to implement intermediate conversion here on this arch");
     }
 
-    if (!WriteCorrelationMatrix((uint32_t*)Histogram, HistogramWidth, BlockNumber, filename)) {
+    if (!WriteCorrelationMatrix((uint32_t*)Histogram, TotalTrials, HistogramWidth, BlockNumber, filename)) {
         throw std::runtime_error("Failed to write matrix to file");
     }
 

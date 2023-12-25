@@ -46,6 +46,7 @@ void SIMDSafeFree(void* ptr)
 
 bool WriteCorrelationMatrix(
     const uint32_t* matrix_data,
+    uint64_t total_trials,
     int matrix_width,
     int block_number,
     const std::string& file_path)
@@ -68,7 +69,7 @@ bool WriteCorrelationMatrix(
         return false;
     }
 
-    const int file_bytes = 4 + 4 + 4 + compressed_size;
+    const int file_bytes = 4*5 + compressed_size;
 
     MappedFile file;
     MappedView view;
@@ -88,9 +89,11 @@ bool WriteCorrelationMatrix(
 
     uint32_t* dest = reinterpret_cast<uint32_t*>(view.Data);
     dest[0] = kCorrelationFileHead;
-    dest[1] = (uint32_t)block_number;
-    dest[2] = (uint32_t)matrix_width;
-    memcpy(dest + 3, compressed, compressed_size);
+    dest[1] = (uint32_t)(total_trials >> 32);
+    dest[2] = (uint32_t)(total_trials);
+    dest[3] = (uint32_t)block_number;
+    dest[4] = (uint32_t)matrix_width;
+    memcpy(dest + 5, compressed, compressed_size);
 
     return true;
 }
@@ -122,8 +125,9 @@ bool CorrelationMatrix::ReadFile(const std::string& file_path)
     if (src[0] != kCorrelationFileHead) {
         return false;
     }
-    BlockNumber = (int)src[1];
-    MatrixWidth = (int)src[2];
+    TotalTrials = ((uint64_t)src[1] << 32) | src[2];
+    BlockNumber = (int)src[3];
+    MatrixWidth = (int)src[4];
     WordCount = MatrixWidth * (MatrixWidth + 1) / 2;
     const int uncompressed_bytes = WordCount * 4;
     SIMDSafeFree(Data);
@@ -144,14 +148,20 @@ bool CorrelationMatrix::ReadFile(const std::string& file_path)
     return true;
 }
 
-void CorrelationMatrix::Accumulate(const CorrelationMatrix& other)
+bool CorrelationMatrix::Accumulate(const CorrelationMatrix& other)
 {
     const uint32_t* src = other.Data;
     uint32_t* dst = Data;
 
     const int words = WordCount;
     for (int i = 0; i < words; ++i) {
-        dst[i] += src[i];
+        const uint32_t dst_i = dst[i];
+        const uint32_t sum = dst_i + src[i];
+        if (sum < dst_i) {
+            // Overflow detected!
+            return false;
+        }
+        dst[i] = sum;
     }
 }
 
@@ -161,13 +171,14 @@ bool CorrelationMatrix::WriteFile(const std::string& file_path)
         return false;
     }
 
-    return WriteCorrelationMatrix(Data, MatrixWidth, BlockNumber, file_path);
+    return WriteCorrelationMatrix(Data, TotalTrials, MatrixWidth, BlockNumber, file_path);
 }
 
 bool CorrelationMatrix_UnitTest()
 {
     // Generate some test data
 
+    uint64_t total_trials = 666999;
     int matrix_width = 1337;
     int block_number = 42;
     std::string file_path = "test.zstd";
@@ -184,7 +195,7 @@ bool CorrelationMatrix_UnitTest()
         return false;
     }
 
-    if (!WriteCorrelationMatrix(matrix_data.data(), matrix_width, block_number, file_path)) {
+    if (!WriteCorrelationMatrix(matrix_data.data(), total_trials, matrix_width, block_number, file_path)) {
         cerr << "WriteCorrelationMatrix failed" << endl;
         return false;
     }
@@ -195,6 +206,10 @@ bool CorrelationMatrix_UnitTest()
         return false;
     }
 
+    if (m.TotalTrials != total_trials) {
+        cerr << "Wrong TotalTrials" << endl;
+        return false;
+    }
     if (m.BlockNumber != block_number) {
         cerr << "Wrong BlockNumber" << endl;
         return false;

@@ -25,6 +25,7 @@ static const uint32_t kCorrelationFileHead = 0xca7dca7d;
 
 bool WriteCorrelationMatrix(
     const uint32_t* matrix_data,
+    uint64_t total_trials,
     int matrix_width,
     int block_number,
     const std::string& file_path);
@@ -34,6 +35,7 @@ class CorrelationMatrix
 public:
     ~CorrelationMatrix();
 
+    uint64_t TotalTrials = 0;
     int BlockNumber = -1;
     int MatrixWidth = -1;
     int WordCount = -1;
@@ -53,7 +55,10 @@ public:
     }
 
     bool ReadFile(const std::string& file_path);
-    void Accumulate(const CorrelationMatrix& other);
+
+    // Returns false if accumulation overflows
+    bool Accumulate(const CorrelationMatrix& other);
+
     bool WriteFile(const std::string& file_path);
 };
 

@@ -34,7 +34,10 @@ int main(int argc, char* argv[])
         return -1;
     }
 
-    m1.Accumulate(m2);
+    if (!m1.Accumulate(m2)) {
+        cerr << "Overflow during matrix accumulation!" << endl;
+        return -1;
+    }
 
     if (!m1.WriteFile(m1_file)) {
         cerr << "Failed to write file: " << m1_file << endl;

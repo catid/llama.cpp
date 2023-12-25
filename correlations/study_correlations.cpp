@@ -31,7 +31,15 @@ public:
     float* RMatrix = nullptr;
     double LargestR = 0.0;
 
-    uint32_t MaxValue = 0;
+    // List of auto-encoder classified neurons.
+    // This will also contain neurons that never were observed firing.
+    std::vector<int> AutoEncoderNeurons;
+
+    int AutoEncoderNeuronCount = 0;
+    int KnowledgeNeuronCount = 0;
+
+    // Maximum seen histogram count for knowledge-classified neurons
+    uint32_t MaxKnowledgeHistValue = 0;
 
     double Get(int i/*row*/, int j/*column*/)
     {
@@ -43,6 +51,8 @@ public:
         int row_offset = i * (i + 1) / 2;
         return RMatrix[row_offset + j];
     }
+
+    std::vector<int> RemapIndices;
 
 protected:
     int WordCount = -1;
@@ -69,63 +79,204 @@ void Correlation::Calculate(CorrelationMatrix& m)
         Means.resize(width);
     }
 
-    // Calculate max value for normalization purposes
-    uint32_t max_value = 0;
-    for (int i = 0; i < m.WordCount; ++i) {
-        const uint32_t value = m.Data[i];
-        if (max_value < value) {
-            max_value = value;
-        }
-    }
-    MaxValue = max_value;
-
-    double norm_factor = 1.0 / max_value;
-
-    // Correlation matrix calculation
-
+    // Initialize RemapIndices
+    RemapIndices.resize(width);
     for (int i = 0; i < width; ++i) {
-        // Calculate mean of row:
-
-        uint64_t sum_values = 0;
-
-        for (int j = 0; j < width; ++j) {
-            sum_values += m.Get(i, j);
-        }
-
-        double mean = sum_values / (double)width * norm_factor;
-        Means[i] = mean;
-
-        // Calculate standard deviation of row:
-
-        double sum_sd = 0.0;
-
-        // For each row:
-        for (int j = 0; j < width; ++j) {
-            uint32_t value = m.Get(i, j);
-            double diff = value * norm_factor - mean;
-            sum_sd += diff * diff;
-        }
-
-        StdDevs[i] = std::sqrt(sum_sd);
+        RemapIndices[i] = i;
     }
 
-    // Calculate r values:
+    AutoEncoderNeurons.clear();
 
-    double largest_r = 0.0;
+    // Iterative algorithm to separate knowledge from auto-encoder neurons:
+
+    KnowledgeNeuronCount = width;
+    for (int i = 0; i < width; ++i) {
+        RemapIndices[i] = i;
+    }
+
+    for (int epoch = 0; epoch < 2; ++ epoch)
+    {
+        // Correlation matrix calculation
+
+        for (int i = 0; i < KnowledgeNeuronCount; ++i) {
+            const int row_i = RemapIndices[i];
+            // Calculate mean of row:
+
+            uint64_t sum_values = 0;
+
+            for (int j = 0; j < KnowledgeNeuronCount; ++j) {
+                const int col_j = RemapIndices[j];
+
+                sum_values += m.Get(row_i, col_j);
+            }
+
+            double mean = sum_values / (double)KnowledgeNeuronCount;
+            Means[row_i] = mean;
+
+            // Calculate standard deviation of row:
+
+            double sum_sd = 0.0;
+
+            // For each row:
+            for (int j = 0; j < KnowledgeNeuronCount; ++j) {
+                const int col_j = RemapIndices[j];
+
+                uint32_t value = m.Get(row_i, col_j);
+                double diff = value - mean;
+
+                sum_sd += diff * diff;
+            }
+
+            StdDevs[row_i] = std::sqrt(sum_sd / width);
+        }
+
+        if (epoch >= 1) {
+            break;
+        }
+
+        uint32_t max_value = 0;
+
+        // Each epoch we identify the ones that are most likely
+        // auto-encoder neurons, and move them to the end of the list,
+        // then do it again with the remaining neurons.
+        for (int i = 0; i < KnowledgeNeuronCount; ++i)
+        {
+            int positive = 0;
+
+            const int row_i = RemapIndices[i];
+            const int mean_i = (int)Means[row_i];
+
+            for (int j = 0; j < KnowledgeNeuronCount; ++j) {
+                if (i == j) {
+                    // Indices are unique so this is an equivalent faster test
+                    continue;
+                }
+
+                const int col_j = RemapIndices[j];
+                const int mean_j = (int)Means[col_j];
+                int value = m.Get(row_i, col_j);
+
+                if (value < mean_i && value < mean_j) {
+                    positive++;
+                } else {
+                    positive--;
+                }
+            }
+
+            if (positive < 0) {
+                AutoEncoderNeurons.push_back(row_i);
+            } else {
+                uint32_t value = m.Get(row_i, row_i);
+                if (max_value < value) {
+                    max_value = value;
+                }
+            }
+        }
+
+        // Sort auto-encoder neurons by how often they fire (just for fun)
+        std::sort(AutoEncoderNeurons.begin(), AutoEncoderNeurons.end(), [&](int i, int j) {
+            uint32_t hist_i = m.Get(i, i);
+            uint32_t hist_j = m.Get(j, j);
+            return hist_i > hist_j;
+        });
+
+        MaxKnowledgeHistValue = max_value;
+
+        // Reset the map
+        for (int i = 0; i < width; ++i) {
+            RemapIndices[i] = i;
+        }
+
+        // Move all selected to the end (in reverse order)
+        int count = 0;
+        for (int i : AutoEncoderNeurons) {
+            ++count;
+            std::swap(RemapIndices[width - count], RemapIndices[i]);
+        }
+
+        // Sort auto-encoder neurons by how often they fire (just for fun)
+        std::sort(RemapIndices.begin(), RemapIndices.end(), [&](int i, int j) {
+            uint32_t hist_i = m.Get(i, i);
+            uint32_t hist_j = m.Get(j, j);
+            return hist_i > hist_j;
+        });
+
+        AutoEncoderNeuronCount = count;
+        KnowledgeNeuronCount = width - AutoEncoderNeuronCount;
+
+        cout << "Epoch " << epoch << ":" << endl;
+        cout << "Max knowledge neuron histogram value: " << MaxKnowledgeHistValue << endl;
+        cout << "Auto-Encoder neurons(" << AutoEncoderNeuronCount << "/" << width
+            << ", " << (AutoEncoderNeuronCount * 100.f / width) << "%) identified" << endl;
+    }
+
+    // HACK
     for (int i = 0; i < width; ++i)
     {
         int offset = i * (i + 1) / 2;
 
+        double norm_factor = 1.0 / m.Get(i, i);
+
         for (int j = 0; j <= i; ++j)
         {
-            double norm_value = m.Data[offset + j] * norm_factor;
-            double cov_ij = (norm_value - Means[i]) * (norm_value - Means[j]);
-            double r = cov_ij / (StdDevs[i] * StdDevs[j]);
-            if (largest_r < r) {
-                largest_r = r;
-            }
+            double r = m.Get(i, j) * norm_factor;
 
             RMatrix[offset + j] = (float)r;
+        }
+    }
+
+    return;
+
+    // Calculate r values:
+
+    double largest_r = 0.0;
+    for (int i = 0; i < KnowledgeNeuronCount; ++i)
+    {
+        int offset = i * (i + 1) / 2;
+
+        const int row_i = RemapIndices[i];
+        for (int j = 0; j <= i; ++j)
+        {
+            const int col_j = RemapIndices[j];
+
+            double denom = StdDevs[row_i] * StdDevs[col_j];
+
+            // Filter out cases that have 0 stddev (all constant)
+            float fr = 0.0;
+            if (denom != 0.0) {
+                double mean_i = Means[row_i];
+                double mean_j = Means[col_j];
+
+                // Calculate covariance between row i and row j
+                double sum_cov = 0.0;
+                for (int k = 0; k < KnowledgeNeuronCount; ++k) {
+                    const int col_k = RemapIndices[k];
+
+                    sum_cov += (m.Get(row_i, col_k) - mean_i) * (m.Get(col_j, col_k) - mean_j);
+                }
+
+                double cov_ij = sum_cov / width;
+
+                double r = cov_ij / denom;
+                if (largest_r < r) {
+                    largest_r = r;
+                }
+
+                //cout << "(" << i << ", " << j << ") = " << r << " cov_ij=" << cov_ij << " stdi=" << StdDevs[i] << " stdj=" << StdDevs[j] << " avgi=" << mean_i << " avgj=" << mean_j << endl;
+
+                fr = (float)r;
+            }
+
+            if (!std::isfinite(fr) || fr > 1.001 || fr < -1.001) {
+                cout << "BAD CORRELATION: (" << i << ", " << j << ") = " << fr << endl;
+                cout << "StdDevs[i] = " << StdDevs[i] << endl;
+                cout << "StdDevs[j] = " << StdDevs[j] << endl;
+                cout << "Means[i] = " << Means[i] << endl;
+                cout << "Means[j] = " << Means[j] << endl;
+                continue;
+            }
+
+            RMatrix[offset + j] = fr;
         }
     }
     LargestR = largest_r;
@@ -135,16 +286,15 @@ struct SAParams
 {
     int max_negative_dist = 32;
     int log2_max_move = 8;
-    int max_epochs = 100;
+    int max_epochs = 1000;
 };
 
-static double ScoreOrder(std::vector<int>& Indices, Correlation& corr, const SAParams& params)
+static double ScoreOrder(int knowledge_count, std::vector<int>& Indices, Correlation& corr, const SAParams& params)
 {
-    const int width = corr.Width;
     double score = 0.0;
 
     // For just everything under the diagonal:
-    for (int i = 0; i < width; ++i)
+    for (int i = 0; i < knowledge_count; ++i)
     {
         for (int j = 0; j < i; ++j)
         {
@@ -178,14 +328,13 @@ static double ScoreOrder(std::vector<int>& Indices, Correlation& corr, const SAP
     We want positive correlated values to be mostly equal on each side if possible to cause them to cluster.
     We don't care how far away they are, so that even far values move together.
 */
-static double GetRightScore(int i, std::vector<int>& Indices, Correlation& corr, const SAParams& params)
+static double GetRightScore(int knowledge_count, int i, std::vector<int>& Indices, Correlation& corr, const SAParams& params)
 {
-    const int width = corr.Width;
     const int row_i = Indices[i];
 
     double score = 0.0;
 
-    for (int j = 0; j < width; ++j) {
+    for (int j = 0; j < knowledge_count; ++j) {
         const int col_j = Indices[j];
 
         if (row_i == col_j) {
@@ -209,14 +358,12 @@ static double GetRightScore(int i, std::vector<int>& Indices, Correlation& corr,
     return score;
 }
 
-static void MoveIndex(std::vector<int>& Indices, int i, int move)
+static void MoveIndex(int knowledge_count, std::vector<int>& Indices, int i, int move)
 {
-    const int width = (int)Indices.size();
-
     if (move > 0) {
         int end = i + move;
-        if (end >= width) {
-            end = width - 1;
+        if (end >= knowledge_count) {
+            end = knowledge_count - 1;
         }
 
         const int t = Indices[i];
@@ -243,18 +390,12 @@ static void MoveIndex(std::vector<int>& Indices, int i, int move)
 
 static void SimulatedAnnealing(Correlation& corr, std::vector<int>& Indices, const SAParams& params)
 {
-    const int width = corr.Width;
-
-    // Initialize indices
-    Indices.resize(width);
-    for (int i = 0; i < width; ++i) {
-        Indices[i] = i;
-    }
+    const int knowledge_count = corr.KnowledgeNeuronCount;
 
     // Shuffle indices to a random initial position
     std::random_device rd;
     std::mt19937 g(rd());
-    std::shuffle(Indices.begin(), Indices.end(), g);
+    std::shuffle(Indices.begin(), Indices.begin() + knowledge_count, g);
 
     uint64_t seed = g();
 
@@ -264,10 +405,10 @@ static void SimulatedAnnealing(Correlation& corr, std::vector<int>& Indices, con
         const double temperature = 1.0 - (epoch + 1) / (double)params.max_epochs;
 
         // For each index:
-        for (int i = 0; i < width; ++i)
+        for (int i = 0; i < knowledge_count; ++i)
         {
             // If we should move left:
-            double right_score = GetRightScore(i, Indices, corr, params);
+            double right_score = GetRightScore(knowledge_count, i, Indices, corr, params);
             if (right_score == 0.0) {
                 continue; // No reason to move!
             }
@@ -288,10 +429,10 @@ static void SimulatedAnnealing(Correlation& corr, std::vector<int>& Indices, con
             }
 
             // Make the move
-            MoveIndex(Indices, i, move);
+            MoveIndex(knowledge_count, Indices, i, move);
         }
 
-        double score = ScoreOrder(Indices, corr, params);
+        double score = ScoreOrder(knowledge_count, Indices, corr, params);
         cout << "Epoch " << epoch << " score=" << score << endl;
     }
 }
@@ -309,8 +450,11 @@ struct ElementInfo
     }
 };
 
-static void RCMOrder(Correlation& corr, std::vector<int>& Indices)
+static std::vector<int> RCMOrder(Correlation& corr)
 {
+    std::vector<int> indices = corr.RemapIndices;
+    const int knowledge_count = corr.KnowledgeNeuronCount;
+
     using namespace boost;
     typedef adjacency_list<vecS, vecS, undirectedS, 
         property<vertex_color_t, default_color_type,
@@ -320,21 +464,25 @@ static void RCMOrder(Correlation& corr, std::vector<int>& Indices)
 
     std::vector<int> top_indices;
 
-    const int k = 1024;
+    const int k = 256;
     const int start_index = 8000;
 
-    const int width = corr.Width;
-    for (int i = 0; i < width; ++i) {
+    for (int i = 0; i < knowledge_count; ++i) {
         // Find k largest elements
         std::priority_queue<ElementInfo, std::vector<ElementInfo>, std::greater<ElementInfo>> minHeap;
-        for (int j = 0; j < width; ++j) {
+
+        const int row_i = corr.RemapIndices[i];
+
+        for (int j = 0; j < knowledge_count; ++j) {
             if (i == j) {
                 continue;
             }
 
+            const int col_j = corr.RemapIndices[j];
+
             ElementInfo info;
-            info.Value = corr.Get(i, j);
-            info.Index = j;
+            info.Value = corr.Get(row_i, col_j);
+            info.Index = col_j;
 
             if (minHeap.size() < k) {
                 // If the heap is not full, add the element directly
@@ -375,19 +523,17 @@ static void RCMOrder(Correlation& corr, std::vector<int>& Indices)
     for (std::size_t i = 0; i < inv_perm.size(); ++i)
         perm[inv_perm[i]] = i;
 
-    std::cout << "Reverse Cuthill-McKee ordering:" << std::endl;
-    for (std::size_t i = 0; i < perm.size(); ++i)
-        std::cout << perm[i] << std::endl;
-
     // Initialize indices
-    Indices.resize(width);
-    for (int i = 0; i < width; ++i) {
-        Indices[i] = perm[i];
+    indices.resize(knowledge_count);
+    for (int i = 0; i < knowledge_count; ++i) {
+        indices[i] = perm[i];
     }
 
     SAParams params;
-    double score = ScoreOrder(Indices, corr, params);
-    cout << "RCM score=" << score << endl;
+    double score = ScoreOrder(knowledge_count, indices, corr, params);
+    cout << "Reverse Cuthill-McKee score=" << score << endl;
+
+    return indices;
 }
 
 static void GenerateNeuronHistogram(CorrelationMatrix& m)
@@ -468,40 +614,11 @@ static void GenerateHeatmap(CorrelationMatrix& m)
     Correlation corr;
     corr.Calculate(m);
 
-    uint64_t diag0 = 0, diag1 = 0;
-    int count0 = 0, count1 = 0;
+    //std::vector<int> Indices = corr.RemapIndices;
+    std::vector<int> Indices = RCMOrder(corr);
 
-    for (int i = 0; i < width; ++i) {
-        int positive = 0;
-        for (int j = 0; j < width; ++j) {
-            if (i == j) {
-                continue;
-            }
-            double r = corr.Get(i, j);
-            if (r > 0) {
-                positive++;
-            } else {
-                positive--;
-            }
-        }
-
-        if (positive < 0) {
-            cout << "Neuron " << i << " Sr<0: diag=" << m.Get(i, i) << endl;
-            diag0 += m.Get(i, i);
-            ++count0;
-        } else {
-            diag1 += m.Get(i, i);
-            ++count1;
-        }
-    }
-    cout << "diag0 = " << diag0 << " count0=" << count0 << " avg0=" << diag0 / count0 << endl;
-    cout << "diag1 = " << diag1 << " count1=" << count1 << " avg1=" << diag1 / count1 << endl;
-
-    std::vector<int> Indices;
-    //RCMOrder(corr, Indices);
-
-    SAParams sa_params;
-    SimulatedAnnealing(corr, Indices, sa_params);
+    //SAParams sa_params;
+    //SimulatedAnnealing(m, corr, Indices, sa_params);
 
     // Generate heatmap
 
@@ -520,7 +637,8 @@ static void GenerateHeatmap(CorrelationMatrix& m)
             const int row_i = Indices[i];
             const int row_j = Indices[j];
 
-            double r = corr.Get(row_i, row_j) * r_norm_factor;
+            double r = m.Get(row_i, row_j) * 2.0 / m.Get(row_i, row_i);
+            //double r = corr.Get(row_i, row_j) * r_norm_factor;
 
             int heat = r * 255.0;
 
