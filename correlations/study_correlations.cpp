@@ -663,16 +663,21 @@ static void GenerateHeatmap(CorrelationMatrix& m)
     //std::vector<int> Indices = RCMOrder(corr);
 
     SAParams sa_params;
-    sa_params.max_move = m.MatrixWidth / 8;
-    //std::vector<int> indices = SimulatedAnnealing(corr, sa_params);
-
+#if 1
     std::vector<int> indices(width);
     for (int i = 0; i < width; ++i) {
         indices[i] = i;
     }
     std::sort(indices.begin(), indices.end(), [&](int i, int j) {
-        return m.Get(i, i) > m.Get(j, j);
+        return m.Get(i, i) < m.Get(j, j);
     });
+#else
+    sa_params.max_move = m.MatrixWidth / 8;
+    std::vector<int> indices = SimulatedAnnealing(corr, sa_params);
+#endif
+
+    double score = ScoreOrder(width, indices.data(), corr, sa_params);
+    cout << "Final score=" << score << endl;
 
     // Generate heatmap
 
