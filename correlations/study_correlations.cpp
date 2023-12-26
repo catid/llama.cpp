@@ -26,10 +26,21 @@ public:
 
     int Width = -1;
 
-    // Triangular matrix just like CorrelationMatrix (except this is actual correlation).
-    // Lower triangle + diagonal, row-first in memory.
+    /*
+        Correlation matrix is not symmetric.  For example P(J|I) != P(I|J)
+        meaning if neuron J fires, it may mean I fires more often than average,
+        but the reverse may not be true: If neuron I fires it may not cause
+        neuron J to fire any more often than normal.
+
+        If I is a row and J is a column, we store the matrix row-first:
+        The upper triangular matrix where J > I is storing P(J|I) - P(J).
+        The lower triangular matrix where I < J is storing P(I|J) - P(I).
+
+        So  "I implies J" or I -> J is in the upper right.
+        And "J implies I" or J -> I is in the lower left.
+    */
     float* RMatrix = nullptr;
-    double LargestR = 0.0;
+    float LargestR = 0.0;
 
     // List of auto-encoder classified neurons.
     // This will also contain neurons that never were observed firing.
@@ -41,15 +52,9 @@ public:
     // Maximum seen histogram count for knowledge-classified neurons
     uint32_t MaxKnowledgeHistValue = 0;
 
-    double Get(int i/*row*/, int j/*column*/)
-    {
-        // Ensure j <= i to avoid reading outside the lower triangle.
-        if (j > i) {
-            std::swap(j, i);
-        }
-
-        int row_offset = i * (i + 1) / 2;
-        return RMatrix[row_offset + j];
+    // See the comment above for RMatrix to understand what this is.
+    float Get(int i/*row*/, int j/*column*/) {
+        return RMatrix[Width * i + j];
     }
 
     std::vector<int> RemapIndices;
@@ -73,12 +78,13 @@ void Correlation::Calculate(CorrelationMatrix& m)
 
     if (WordCount != m.WordCount) {
         SIMDSafeFree(RMatrix);
-        RMatrix = (float*)SIMDSafeAllocate(m.WordCount * sizeof(float));
+        RMatrix = (float*)SIMDSafeAllocate(m.MatrixWidth * m.MatrixWidth * sizeof(float));
 
         StdDevs.resize(width);
         Means.resize(width);
     }
 
+#if 0
     // Initialize RemapIndices
     RemapIndices.resize(width);
     for (int i = 0; i < width; ++i) {
@@ -209,23 +215,62 @@ void Correlation::Calculate(CorrelationMatrix& m)
         cout << "Auto-Encoder neurons(" << AutoEncoderNeuronCount << "/" << width
             << ", " << (AutoEncoderNeuronCount * 100.f / width) << "%) identified" << endl;
     }
+#endif
 
-    // HACK
+    const double inv_total = 1.0 / (double)m.TotalTrials;
+
     for (int i = 0; i < width; ++i)
     {
-        int offset = i * (i + 1) / 2;
+        // Calculate P(I) = Hist(I,I) / TotalCount
+        const uint32_t hist_i = m.Get(i, i);
+        const double p_i = hist_i * inv_total;
 
-        double norm_factor = 1.0 / m.Get(i, i);
-
+        // Note that for the diagonal this produces a correlation of 1.0 as expected
         for (int j = 0; j <= i; ++j)
         {
-            double r = m.Get(i, j) * norm_factor;
+            // Calculate conditional P(I | J) = P(J and I) / P(J) from histogram counts:
+            //  P(J) = Hist(J,J) / TotalCount
+            //  P(J and I) = Hist(I,J) / TotalCount = Hist(J,I) / TotalCount
+            //  So the "/ TotalCount" factor cancels out: P(I|J) = Hist(I,J) / Hist(J,J)
+            const uint32_t hist_ij = m.Get(i, j);
+            const uint32_t hist_j = m.Get(j, j);
+            const double cond_p_i_given_j = hist_ij / (double)hist_j;
 
-            RMatrix[offset + j] = (float)r;
+            // Calculate P(J) = Hist(J,J) / TotalCount
+            const double p_j = hist_j * inv_total;
+
+            // Calculate P(J|I) = Hist(I,J) / Hist(J,J) = Hist(J,I) / Hist(J,J)
+            const double cond_p_j_given_i = hist_ij / (double)hist_i;
+
+            /*
+                What is conditional P(I | J) - P(I) ?
+
+                * It ranges from -1 to 1 just like a correlation.
+                * It represents "how much more" event I happens than average when J is happening.
+                * This measures how true is the logical statement "I implies J", so if it is -1
+                  then "I implies Not J" and if it is 1, then "I implies J" 100% of the time.
+
+                How does this compare to P(J | I) - P(J) ?
+
+                * It's the logical implication I -> J ("I implies J") instead of ("J implies I").
+                * Otherwise it's the same idea.  We store it in the correlation matrix on the
+                  opposite side of the diagonal so both can be looked up later.
+            */
+
+            /*
+                If I is a row and J is a column, we store the matrix row-first:
+                The upper triangular matrix where J > I is storing P(J|I) - P(J).
+                The lower triangular matrix where I < J is storing P(I|J) - P(I).
+
+                So  "I implies J" or I -> J is in the upper right.
+                And "J implies I" or J -> I is in the lower left.
+            */
+            RMatrix[i * width + j] = static_cast<float>( cond_p_i_given_j - p_i );
+            RMatrix[j * width + i] = static_cast<float>( cond_p_j_given_i - p_j );
         }
     }
 
-    return;
+#if 0
 
     // Calculate r values:
 
@@ -280,85 +325,79 @@ void Correlation::Calculate(CorrelationMatrix& m)
         }
     }
     LargestR = largest_r;
+
+#endif
 }
 
 struct SAParams
 {
-    int max_negative_dist = 32;
-    int log2_max_move = 8;
+    int max_move = 5000;
     int max_epochs = 1000;
 };
 
-static double ScoreOrder(int knowledge_count, std::vector<int>& Indices, Correlation& corr, const SAParams& params)
+static double ScoreOrder(int width, const int* indices, Correlation& corr, const SAParams& params)
 {
     double score = 0.0;
 
     // For just everything under the diagonal:
-    for (int i = 0; i < knowledge_count; ++i)
+    for (int i = 0; i < width; ++i)
     {
         for (int j = 0; j < i; ++j)
         {
             // Get correlation matrix entry for transformed indices,
             // which does not change the correlation matrix values but just re-orders them.
             // These are guaranteed to be unique.
-            const int row_i = Indices[i];
-            const int col_j = Indices[j];
-
-            double r = corr.Get(row_i, col_j);
+            const int row_i = indices[i];
+            const int col_j = indices[j];
 
             // distance from diagonal
             int d = i - j;
-#if 0
-            // Only negative correlations close to the column should be penalized
-            if (r < 0.0 && d > params.max_negative_dist) {
-                continue;
+            if (d <= 32) {
+                score += corr.Get(row_i, col_j);
+                score += corr.Get(col_j, row_i);
             }
-#endif
-            score += r / d;
         }
     }
 
     return score;
 }
 
-/*
-    We want negative correlated values to be far away.
-    Past a certain distance we don't care since we won't evaluate them together as neighbors.
-
-    We want positive correlated values to be mostly equal on each side if possible to cause them to cluster.
-    We don't care how far away they are, so that even far values move together.
-*/
-static double GetRightScore(int knowledge_count, int i, std::vector<int>& Indices, Correlation& corr, const SAParams& params)
+static int GetDirection(int width, int i, const int* indices, Correlation& corr, const SAParams& params)
 {
-    const int row_i = Indices[i];
+    const int row_i = indices[i];
 
-    double score = 0.0;
+    double p_sum = 0.0;
+    for (int j = 0; j < i; ++j) {
+        const int col_j = indices[j];
 
-    for (int j = 0; j < knowledge_count; ++j) {
-        const int col_j = Indices[j];
-
-        if (row_i == col_j) {
+        float r = corr.Get(row_i, col_j);
+        if (r < 0.f) {
+            // Ignore negative correlations
             continue;
         }
 
-        const double r = corr.Get(row_i, col_j);
-#if 0
-        // Only negative correlations close to the column should be penalized
-        if (r < 0.0 && std::abs(i - j) > params.max_negative_dist) {
-            continue;
-        }
-#endif
-        if (j > i) {
-            score += r;
-        } else {
-            score -= r;
-        }
+        double dr = static_cast<double>( r );
+        p_sum += dr;
     }
 
-    return score;
+    double n_sum = 0.0;
+    for (int j = i + 1; j < width; ++j) {
+        const int col_j = indices[j];
+
+        float r = corr.Get(row_i, col_j);
+        if (r < 0.f) {
+            // Ignore negative correlations
+            continue;
+        }
+
+        double dr = static_cast<double>( r );
+        n_sum += dr;
+    }
+
+    return p_sum > n_sum ? 1 : -1;
 }
 
-static void MoveIndex(int knowledge_count, std::vector<int>& Indices, int i, int move)
+static void MoveIndex(int knowledge_count, int* indices, int i, int move)
 {
     if (move > 0) {
         int end = i + move;
@@ -366,36 +405,40 @@ static void MoveIndex(int knowledge_count, std::vector<int>& Indices, int i, int
             end = knowledge_count - 1;
         }
 
-        const int t = Indices[i];
+        const int t = indices[i];
         for (int j = i; j < end; ++j) {
-            Indices[j] = Indices[j + 1];
+            indices[j] = indices[j + 1];
         }
-        Indices[end] = t;
+        indices[end] = t;
     } else {
         int end = i + move;
         if (end < 0) {
             end = 0;
         }
 
-        const int t = Indices[i];
+        const int t = indices[i];
         for (int j = i; j > end; --j) {
-            Indices[j] = Indices[j - 1];
+            indices[j] = indices[j - 1];
         }
-        Indices[end] = t;
+        indices[end] = t;
     }
 }
 
 #include <random>
 #include <algorithm>
 
-static void SimulatedAnnealing(Correlation& corr, std::vector<int>& Indices, const SAParams& params)
+static std::vector<int> SimulatedAnnealing(Correlation& corr, const SAParams& params)
 {
-    const int knowledge_count = corr.KnowledgeNeuronCount;
+    const int width = corr.Width;
+    std::vector<int> indices(width);
+    for (int i = 0; i < width; ++i) {
+        indices[i] = i;
+    }
 
     // Shuffle indices to a random initial position
     std::random_device rd;
     std::mt19937 g(rd());
-    std::shuffle(Indices.begin(), Indices.begin() + knowledge_count, g);
+    std::shuffle(indices.begin(), indices.begin() + width, g);
 
     uint64_t seed = g();
 
@@ -405,37 +448,33 @@ static void SimulatedAnnealing(Correlation& corr, std::vector<int>& Indices, con
         const double temperature = 1.0 - (epoch + 1) / (double)params.max_epochs;
 
         // For each index:
-        for (int i = 0; i < knowledge_count; ++i)
+        for (int i = 0; i < width; ++i)
         {
-            // If we should move left:
-            double right_score = GetRightScore(knowledge_count, i, Indices, corr, params);
-            if (right_score == 0.0) {
-                continue; // No reason to move!
-            }
+            int direction = GetDirection(width, i, indices.data(), corr, params);
 
             // Uniformly pick a random move magnitude
-            const uint32_t move_mask = (1 << params.log2_max_move) - 1;
-            int move = (uint32_t)SplitMix64(seed) & move_mask;
+            int mag = params.max_move;
+            mag = (uint32_t)SplitMix64(seed) % mag;
 
             // Modulate movement by temperature, reducing it slowly towards the end
-            move *= temperature;
-            if (move < 1) {
-                move = 1;
-            }
-
-            // If we should be moving to the left:
-            if (right_score < 0.0) {
-                move = -move;
+            mag *= temperature;
+            if (mag < 1) {
+                mag = 1;
             }
 
             // Make the move
-            MoveIndex(knowledge_count, Indices, i, move);
+            int move = (direction > 0) ? mag : -mag;
+            MoveIndex(width, indices.data(), i, move);
         }
 
-        double score = ScoreOrder(knowledge_count, Indices, corr, params);
+        double score = ScoreOrder(width, indices.data(), corr, params);
         cout << "Epoch " << epoch << " score=" << score << endl;
     }
+
+    return indices;
 }
+
+#if 0
 
 #include <boost/graph/adjacency_list.hpp>
 #include <boost/graph/cuthill_mckee_ordering.hpp>
@@ -452,9 +491,6 @@ struct ElementInfo
 
 static std::vector<int> RCMOrder(Correlation& corr)
 {
-    std::vector<int> indices = corr.RemapIndices;
-    const int knowledge_count = corr.KnowledgeNeuronCount;
-
     using namespace boost;
     typedef adjacency_list<vecS, vecS, undirectedS, 
         property<vertex_color_t, default_color_type,
@@ -462,27 +498,20 @@ static std::vector<int> RCMOrder(Correlation& corr)
     typedef graph_traits<Graph>::vertex_descriptor Vertex;
     Graph G;
 
-    std::vector<int> top_indices;
+    const int k = 32;
+    const int start_index = 1000;
 
-    const int k = 256;
-    const int start_index = 8000;
-
-    for (int i = 0; i < knowledge_count; ++i) {
+    const int width = corr.Width;
+    for (int i = 0; i < width; ++i) {
         // Find k largest elements
         std::priority_queue<ElementInfo, std::vector<ElementInfo>, std::greater<ElementInfo>> minHeap;
 
-        const int row_i = corr.RemapIndices[i];
-
-        for (int j = 0; j < knowledge_count; ++j) {
-            if (i == j) {
-                continue;
-            }
-
-            const int col_j = corr.RemapIndices[j];
-
+        for (int j = 0; j < i; ++j) {
             ElementInfo info;
-            info.Value = corr.Get(row_i, col_j);
-            info.Index = col_j;
+
+            // The graph is undirected in this algorithm so use the sum of I->J and J->I correlations as an estimate.
+            info.Value = corr.Get(i, j) + corr.Get(j, i);
+            info.Index = j;
 
             if (minHeap.size() < k) {
                 // If the heap is not full, add the element directly
@@ -499,7 +528,7 @@ static std::vector<int> RCMOrder(Correlation& corr)
         std::vector<int> neighbors;
         while (!minHeap.empty()) {
             auto& top = minHeap.top();
-            if (top.Value > 0.0) {
+            if (top.Value > 0.1) {
                 // We only consider nodes neighbors if they have positive correlation
                 neighbors.push_back(top.Index);
             }
@@ -524,17 +553,34 @@ static std::vector<int> RCMOrder(Correlation& corr)
         perm[inv_perm[i]] = i;
 
     // Initialize indices
-    indices.resize(knowledge_count);
-    for (int i = 0; i < knowledge_count; ++i) {
-        indices[i] = perm[i];
-    }
+    std::vector<int> indices;
+    indices.resize(width);
 
     SAParams params;
-    double score = ScoreOrder(knowledge_count, indices, corr, params);
-    cout << "Reverse Cuthill-McKee score=" << score << endl;
+
+    for (int i = 0; i < width; ++i) {
+        indices[i] = i;
+    }
+    cout << "Baseline score=" << ScoreOrder(width, indices.data(), corr, params) << endl;
+
+    std::random_device rd;
+    std::mt19937 g(rd());
+
+    std::shuffle(indices.begin(), indices.begin() + width, g);
+    cout << "Shuffle#1 score=" << ScoreOrder(width, indices.data(), corr, params) << endl;
+
+    std::shuffle(indices.begin(), indices.begin() + width, g);
+    cout << "Shuffle#2 score=" << ScoreOrder(width, indices.data(), corr, params) << endl;
+
+    for (int i = 0; i < width; ++i) {
+        indices[i] = perm[i];
+    }
+    cout << "Reverse Cuthill-McKee score=" << ScoreOrder(width, indices.data(), corr, params) << endl;
 
     return indices;
 }
+
+#endif
 
 static void GenerateNeuronHistogram(CorrelationMatrix& m)
 {
@@ -614,11 +660,11 @@ static void GenerateHeatmap(CorrelationMatrix& m)
     Correlation corr;
     corr.Calculate(m);
 
-    //std::vector<int> Indices = corr.RemapIndices;
-    std::vector<int> Indices = RCMOrder(corr);
+    //std::vector<int> Indices = RCMOrder(corr);
 
-    //SAParams sa_params;
-    //SimulatedAnnealing(m, corr, Indices, sa_params);
+    SAParams sa_params;
+    sa_params.max_move = m.MatrixWidth / 8;
+    std::vector<int> indices = SimulatedAnnealing(corr, sa_params);
 
     // Generate heatmap
 
@@ -629,21 +675,19 @@ static void GenerateHeatmap(CorrelationMatrix& m)
 
     for (int i = 0; i < width; ++i)
     {
-        // Amplify all the correlations a lot since most are pretty small
-        double r_norm_factor = width / 2;
-
-        for (int j = 0; j <= i; ++j)
+        for (int j = 0; j < width; ++j)
         {
-            const int row_i = Indices[i];
-            const int row_j = Indices[j];
+            const int row_i = indices[i];
+            const int col_j = indices[j];
 
-            double r = m.Get(row_i, row_j) * 2.0 / m.Get(row_i, row_i);
-            //double r = corr.Get(row_i, row_j) * r_norm_factor;
+            // This is a value from -1..1
+            //double r = corr.Get(i, j);
+            double r = corr.Get(row_i, col_j);
 
-            int heat = r * 255.0;
+            // Heat should be a value from -255..255
+            int heat = static_cast<int>( r * 255.0 );
 
             int offset_ij = i * width + j;
-            int offset_ji = j * width + i;
             if (heat >= 0) {
                 if (heat > 255) {
                     heat = 255;
@@ -651,9 +695,6 @@ static void GenerateHeatmap(CorrelationMatrix& m)
                 heatmap[offset_ij * 3 + 0] = (uint8_t)heat;
                 heatmap[offset_ij * 3 + 1] = (uint8_t)heat;
                 heatmap[offset_ij * 3 + 2] = (uint8_t)heat;
-                heatmap[offset_ji * 3 + 0] = (uint8_t)heat;
-                heatmap[offset_ji * 3 + 1] = (uint8_t)heat;
-                heatmap[offset_ji * 3 + 2] = (uint8_t)heat;
             }
             else if (heat < 0) {
                 heat = -heat;
@@ -663,9 +704,6 @@ static void GenerateHeatmap(CorrelationMatrix& m)
                 heatmap[offset_ij * 3 + 0] = 0;
                 heatmap[offset_ij * 3 + 1] = (uint8_t)heat;
                 heatmap[offset_ij * 3 + 2] = 0;
-                heatmap[offset_ji * 3 + 0] = 0;
-                heatmap[offset_ji * 3 + 1] = (uint8_t)heat;
-                heatmap[offset_ji * 3 + 2] = 0;
             }
         }
     }

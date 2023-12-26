@@ -172,6 +172,7 @@ bool CorrelationMatrix::Accumulate(const CorrelationMatrix& other)
     }
 
     TotalTrials += other.TotalTrials;
+    return true;
 }
 
 bool CorrelationMatrix::WriteFile(const std::string& file_path)
