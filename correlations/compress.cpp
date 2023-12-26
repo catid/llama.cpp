@@ -109,20 +109,25 @@ bool CorrelationMatrix::ReadFile(const std::string& file_path)
     MappedView view;
 
     if (!file.OpenRead(file_path.c_str(), true, false)) {
+        cerr << "ReadFile failed: file.OpenRead" << endl;
         return false;
     }
     if (!view.Open(&file)) {
+        cerr << "ReadFile failed: view.Open" << endl;
         return false;
     }
     if (!view.MapView(0, file.Length)) {
+        cerr << "ReadFile failed: view.MapView" << endl;
         return false;
     }
-    if (file.Length < 12) {
+    if (file.Length < 20) {
+        cerr << "ReadFile failed: file.Length < 20" << endl;
         return false;
     }
 
     const uint32_t* src = reinterpret_cast<uint32_t*>(view.Data);
     if (src[0] != kCorrelationFileHead) {
+        cerr << "ReadFile failed: src[0] != kCorrelationFileHead" << endl;
         return false;
     }
     TotalTrials = ((uint64_t)src[1] << 32) | src[2];
@@ -139,9 +144,11 @@ bool CorrelationMatrix::ReadFile(const std::string& file_path)
         src + 3,
         file.Length - 12);
     if (ZSTD_isError(actual_bytes)) {
+        cerr << "ReadFile failed: ZSTD_isError" << endl;
         return false;
     }
     if ((int)actual_bytes != uncompressed_bytes) {
+        cerr << "ReadFile failed: actual_bytes != uncompressed_bytes" << endl;
         return false;
     }
 
