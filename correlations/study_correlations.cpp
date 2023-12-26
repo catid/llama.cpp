@@ -54,7 +54,11 @@ public:
 
     // See the comment above for RMatrix to understand what this is.
     float Get(int i/*row*/, int j/*column*/) {
-        return RMatrix[Width * i + j];
+        if (j > i) {
+            std::swap(i, j);
+        }
+        const int row_offset = i * (i + 1) / 2;
+        return RMatrix[row_offset + j];
     }
 
     std::vector<int> RemapIndices;
@@ -78,7 +82,7 @@ void Correlation::Calculate(CorrelationMatrix& m)
 
     if (WordCount != m.WordCount) {
         SIMDSafeFree(RMatrix);
-        RMatrix = (float*)SIMDSafeAllocate(m.MatrixWidth * m.MatrixWidth * sizeof(float));
+        RMatrix = (float*)SIMDSafeAllocate(m.WordCount * sizeof(float));
 
         StdDevs.resize(width);
         Means.resize(width);
@@ -221,6 +225,8 @@ void Correlation::Calculate(CorrelationMatrix& m)
 
     for (int i = 0; i < width; ++i)
     {
+        const int row_offset = i * (i + 1) / 2;
+
         // Calculate P(I) = Hist(I,I) / TotalCount
         const uint32_t hist_i = m.Get(i, i);
         const double p_i = hist_i * inv_total;
@@ -228,19 +234,8 @@ void Correlation::Calculate(CorrelationMatrix& m)
         // Note that for the diagonal this produces a correlation of 1.0 as expected
         for (int j = 0; j <= i; ++j)
         {
-            // Calculate conditional P(I | J) = P(J and I) / P(J) from histogram counts:
-            //  P(J) = Hist(J,J) / TotalCount
-            //  P(J and I) = Hist(I,J) / TotalCount = Hist(J,I) / TotalCount
-            //  So the "/ TotalCount" factor cancels out: P(I|J) = Hist(I,J) / Hist(J,J)
             const uint32_t hist_ij = m.Get(i, j);
             const uint32_t hist_j = m.Get(j, j);
-            const double cond_p_i_given_j = hist_ij / (double)hist_j;
-
-            // Calculate P(J) = Hist(J,J) / TotalCount
-            const double p_j = hist_j * inv_total;
-
-            // Calculate P(J|I) = Hist(I,J) / Hist(J,J) = Hist(J,I) / Hist(J,J)
-            const double cond_p_j_given_i = hist_ij / (double)hist_i;
 
             /*
                 What is conditional P(I | J) - P(I) ?
@@ -259,14 +254,50 @@ void Correlation::Calculate(CorrelationMatrix& m)
 
             /*
                 If I is a row and J is a column, we store the matrix row-first:
-                The upper triangular matrix where J > I is storing P(J|I) - P(J).
-                The lower triangular matrix where I < J is storing P(I|J) - P(I).
 
-                So  "I implies J" or I -> J is in the upper right.
-                And "J implies I" or J -> I is in the lower left.
+                    The lower triangular matrix where I<J is storing P(I|J) - P(I).
+                    The upper triangular matrix where J>I is storing P(J|I) - P(J).
+
+                    So "J implies I" or J->I is in the lower left.
+                    So "I implies J" or I->J is in the upper right.
+
+                Observations:
+
+                    Sort the neurons by firing frequency.  Then:
+
+                    The upper right triangle is a lot less cloudy than the lower left (particularly at the bottom).
+                    So you get better signal from Row activation -> Column activation than the other way.
+
+                    In fact we don't even care about the bottom triangle data at all since it's noisy.
+
+                Conclusion:
+
+                    Rather than storing both I->J and J->I correlations:
+
+                    Choose P(J|I) - P(J), for P(J) < P(I).
+                    Choose P(I|J) - P(I), for P(I) > P(J).
             */
-            RMatrix[i * width + j] = static_cast<float>( cond_p_i_given_j - p_i );
-            RMatrix[j * width + i] = static_cast<float>( cond_p_j_given_i - p_j );
+
+            // Hist(J) < Hist(I) implies that P(J) < P(I)
+            if (hist_j < hist_i) {
+                // Calculate P(J) = Hist(J,J) / TotalCount
+                const double p_j = hist_j * inv_total;
+
+                // Calculate P(J|I) = Hist(I,J) / Hist(J,J) = Hist(J,I) / Hist(J,J)
+                const double cond_p_j_given_i = hist_ij / (double)hist_i;
+
+                // Choose C(I,J) = P(J|I) - P(J), for P(J) > P(I).
+                RMatrix[row_offset + j] = static_cast<float>( cond_p_j_given_i - p_j );
+            } else {
+                // Calculate conditional P(I | J) = P(J and I) / P(J) from histogram counts:
+                //  P(J) = Hist(J,J) / TotalCount
+                //  P(J and I) = Hist(I,J) / TotalCount = Hist(J,I) / TotalCount
+                //  So the "/ TotalCount" factor cancels out: P(I|J) = Hist(I,J) / Hist(J,J)
+                const double cond_p_i_given_j = hist_ij / (double)hist_j;
+
+                // Choose C(I,J) = P(I|J) - P(I), for P(I) < P(J).
+                RMatrix[row_offset + j] = static_cast<float>( cond_p_i_given_j - p_i );
+            }
         }
     }
 
