@@ -141,7 +141,7 @@ bool CorrelationMatrix::ReadFile(const std::string& file_path)
     const size_t actual_bytes = ZSTD_decompress(
         Data,
         uncompressed_bytes,
-        src + 3,
+        src + 5,
         file.Length - 12);
     if (ZSTD_isError(actual_bytes)) {
         cerr << "ReadFile failed: ZSTD_isError" << endl;
