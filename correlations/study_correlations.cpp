@@ -369,6 +369,7 @@ struct SAParams
 {
     int max_move = 5000;
     int max_epochs = 1000;
+    float r_thresh = 0.05f;
 };
 
 static double ScoreOrder(int width, const int* indices, Correlation& corr, int diag_dist_score = 32)
@@ -414,8 +415,7 @@ static int GetDirection(int width, int i, const int* indices, Correlation& corr,
         const int col_j = indices[j];
 
         float r = corr.Get(row_i, col_j);
-        if (r < 0.f) {
-            // Ignore negative correlations
+        if (r < params.r_thresh) {
             continue;
         }
 
@@ -428,8 +428,7 @@ static int GetDirection(int width, int i, const int* indices, Correlation& corr,
         const int col_j = indices[j];
 
         float r = corr.Get(row_i, col_j);
-        if (r < 0.f) {
-            // Ignore negative correlations
+        if (r < params.r_thresh) {
             continue;
         }
 
@@ -437,7 +436,7 @@ static int GetDirection(int width, int i, const int* indices, Correlation& corr,
         n_sum += dr;
     }
 
-    return p_sum > n_sum ? 1 : -1;
+    return p_sum > n_sum ? -1 : 1;
 }
 
 static void MoveIndex(int knowledge_count, int* indices, int i, int move)
@@ -699,8 +698,6 @@ static void GenerateHeatmap(CorrelationMatrix& m)
     Correlation corr;
     corr.Calculate(m);
 
-    SAParams sa_params;
-
     std::vector<int> indices(width);
 
     for (int i = 0; i < width; ++i) {
@@ -722,7 +719,7 @@ static void GenerateHeatmap(CorrelationMatrix& m)
     std::shuffle(indices.begin(), indices.begin() + width, g);
     cout << "Shuffle#2 score=" << ScoreOrder(width, indices.data(), corr) << endl;
 
-#if 1
+#if 0
     RCMParams rcm_params;
 
     for (int trials = 0; trials < 100; ++trials) {
@@ -730,6 +727,7 @@ static void GenerateHeatmap(CorrelationMatrix& m)
         indices = RCMOrder(m, corr, rcm_params);
     }
 #else
+    SAParams sa_params;
     sa_params.max_move = m.MatrixWidth / 8;
     indices = SimulatedAnnealing(corr, sa_params);
 #endif
