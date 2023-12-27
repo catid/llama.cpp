@@ -255,9 +255,7 @@ void Correlation::Calculate(CorrelationMatrix& m)
                 * It's the logical implication I -> J ("I implies J") instead of ("J implies I").
                 * Otherwise it's the same idea.  We store it in the correlation matrix on the
                   opposite side of the diagonal so both can be looked up later.
-            */
 
-            /*
                 If I is a row and J is a column, we store the matrix row-first:
 
                     The lower triangular matrix where I<J is storing P(I|J) - P(I).
@@ -281,6 +279,8 @@ void Correlation::Calculate(CorrelationMatrix& m)
 
                     Choose P(J|I) - P(J), for P(J) < P(I).
                     Choose P(I|J) - P(I), for P(I) > P(J).
+
+                    This means we just need a lower-triangular correlation matrix (half the memory).
             */
 
             // Hist(J) < Hist(I) implies that P(J) < P(I)
@@ -305,64 +305,6 @@ void Correlation::Calculate(CorrelationMatrix& m)
             }
         }
     }
-
-#if 0
-
-    // Calculate r values:
-
-    double largest_r = 0.0;
-    for (int i = 0; i < KnowledgeNeuronCount; ++i)
-    {
-        int offset = i * (i + 1) / 2;
-
-        const int row_i = RemapIndices[i];
-        for (int j = 0; j <= i; ++j)
-        {
-            const int col_j = RemapIndices[j];
-
-            double denom = StdDevs[row_i] * StdDevs[col_j];
-
-            // Filter out cases that have 0 stddev (all constant)
-            float fr = 0.0;
-            if (denom != 0.0) {
-                double mean_i = Means[row_i];
-                double mean_j = Means[col_j];
-
-                // Calculate covariance between row i and row j
-                double sum_cov = 0.0;
-                for (int k = 0; k < KnowledgeNeuronCount; ++k) {
-                    const int col_k = RemapIndices[k];
-
-                    sum_cov += (m.Get(row_i, col_k) - mean_i) * (m.Get(col_j, col_k) - mean_j);
-                }
-
-                double cov_ij = sum_cov / width;
-
-                double r = cov_ij / denom;
-                if (largest_r < r) {
-                    largest_r = r;
-                }
-
-                //cout << "(" << i << ", " << j << ") = " << r << " cov_ij=" << cov_ij << " stdi=" << StdDevs[i] << " stdj=" << StdDevs[j] << " avgi=" << mean_i << " avgj=" << mean_j << endl;
-
-                fr = (float)r;
-            }
-
-            if (!std::isfinite(fr) || fr > 1.001 || fr < -1.001) {
-                cout << "BAD CORRELATION: (" << i << ", " << j << ") = " << fr << endl;
-                cout << "StdDevs[i] = " << StdDevs[i] << endl;
-                cout << "StdDevs[j] = " << StdDevs[j] << endl;
-                cout << "Means[i] = " << Means[i] << endl;
-                cout << "Means[j] = " << Means[j] << endl;
-                continue;
-            }
-
-            RMatrix[offset + j] = fr;
-        }
-    }
-    LargestR = largest_r;
-
-#endif
 }
 
 struct SAParams
