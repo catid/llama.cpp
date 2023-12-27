@@ -237,6 +237,11 @@ void Correlation::Calculate(CorrelationMatrix& m)
             const uint32_t hist_ij = m.Get(i, j);
             const uint32_t hist_j = m.Get(j, j);
 
+            if (hist_j == 0 || hist_i == 0) {
+                RMatrix[row_offset + j] = -1.f;
+                continue;
+            }
+
             /*
                 What is conditional P(I | J) - P(I) ?
 
@@ -366,26 +371,33 @@ struct SAParams
     int max_epochs = 1000;
 };
 
-static double ScoreOrder(int width, const int* indices, Correlation& corr, const SAParams& params)
+static double ScoreOrder(int width, const int* indices, Correlation& corr, int diag_dist_score = 32)
 {
     double score = 0.0;
 
     // For just everything under the diagonal:
     for (int i = 0; i < width; ++i)
     {
+        const int row_i = indices[i];
+
         for (int j = 0; j < i; ++j)
         {
             // Get correlation matrix entry for transformed indices,
             // which does not change the correlation matrix values but just re-orders them.
             // These are guaranteed to be unique.
-            const int row_i = indices[i];
             const int col_j = indices[j];
+
+            if (row_i == col_j || row_i >= width || col_j >= width) {
+                //cout << "ERROR: " << row_i << ", " << col_j << endl;
+            }
 
             // distance from diagonal
             int d = i - j;
-            if (d <= 32) {
-                score += corr.Get(row_i, col_j);
-                score += corr.Get(col_j, row_i);
+            if (d <= diag_dist_score) {
+                float r = corr.Get(row_i, col_j);
+                if (r > 0.f) {
+                    score += r;
+                }
             }
         }
     }
@@ -498,14 +510,14 @@ static std::vector<int> SimulatedAnnealing(Correlation& corr, const SAParams& pa
             MoveIndex(width, indices.data(), i, move);
         }
 
-        double score = ScoreOrder(width, indices.data(), corr, params);
+        double score = ScoreOrder(width, indices.data(), corr);
         cout << "Epoch " << epoch << " score=" << score << endl;
     }
 
     return indices;
 }
 
-#if 0
+#if 1
 
 #include <boost/graph/adjacency_list.hpp>
 #include <boost/graph/cuthill_mckee_ordering.hpp>
@@ -513,15 +525,26 @@ static std::vector<int> SimulatedAnnealing(Correlation& corr, const SAParams& pa
 struct ElementInfo
 {
     int Index = -1;
-    double Value = 0.0;
+    float Value = 0.0;
 
     bool operator>(const ElementInfo& rhs) const {
         return Value > rhs.Value;
     }
 };
 
-static std::vector<int> RCMOrder(Correlation& corr)
+struct RCMParams
 {
+    int max_k = 256; // Max count
+    float min_corr = 0.07f; // Cut-off: 6% more firing than expected
+    int start_index = 0;
+};
+
+static std::vector<int> RCMOrder(CorrelationMatrix& m, Correlation& corr, const RCMParams& params = RCMParams())
+{
+    const int width = corr.Width;
+
+    // RCM:
+
     using namespace boost;
     typedef adjacency_list<vecS, vecS, undirectedS, 
         property<vertex_color_t, default_color_type,
@@ -529,22 +552,17 @@ static std::vector<int> RCMOrder(Correlation& corr)
     typedef graph_traits<Graph>::vertex_descriptor Vertex;
     Graph G;
 
-    const int k = 32;
-    const int start_index = 1000;
-
-    const int width = corr.Width;
     for (int i = 0; i < width; ++i) {
         // Find k largest elements
         std::priority_queue<ElementInfo, std::vector<ElementInfo>, std::greater<ElementInfo>> minHeap;
 
         for (int j = 0; j < i; ++j) {
-            ElementInfo info;
-
             // The graph is undirected in this algorithm so use the sum of I->J and J->I correlations as an estimate.
-            info.Value = corr.Get(i, j) + corr.Get(j, i);
+            ElementInfo info;
+            info.Value = corr.Get(i, j);
             info.Index = j;
 
-            if (minHeap.size() < k) {
+            if (minHeap.size() < params.max_k) {
                 // If the heap is not full, add the element directly
                 minHeap.push(info);
             } else if (info > minHeap.top()) {
@@ -559,7 +577,7 @@ static std::vector<int> RCMOrder(Correlation& corr)
         std::vector<int> neighbors;
         while (!minHeap.empty()) {
             auto& top = minHeap.top();
-            if (top.Value > 0.1) {
+            if (top.Value > params.min_corr) {
                 // We only consider nodes neighbors if they have positive correlation
                 neighbors.push_back(top.Index);
             }
@@ -567,47 +585,37 @@ static std::vector<int> RCMOrder(Correlation& corr)
         }
 
         for (int j : neighbors) {
+            //cout << "i=" << i << ", j=" << j << " -> r=" << corr.Get(i, j) << endl;
+            // Edges are bidirectional, so we only need to add it once
             add_edge(i, j, G);
         }
     }
 
+    cout << "Number of RCM graph vertices: " << num_vertices(G) << " (total neurons = " << width << ")" << endl;
+
     std::vector<graph_traits<Graph>::vertex_descriptor> inv_perm(num_vertices(G));
 
-    Vertex s = vertex(start_index, G);
+    Vertex s = vertex(params.start_index, G);
 
     cuthill_mckee_ordering(G, s, inv_perm.rbegin(), get(vertex_color, G), 
                                   get(vertex_degree, G));
 
     // Inverse permutation to get the RCM ordering
     std::vector<graph_traits<Graph>::vertex_descriptor> perm(num_vertices(G));
-    for (std::size_t i = 0; i < inv_perm.size(); ++i)
-        perm[inv_perm[i]] = i;
 
-    // Initialize indices
-    std::vector<int> indices;
-    indices.resize(width);
-
-    SAParams params;
-
+    std::vector<int> indices(width);
     for (int i = 0; i < width; ++i) {
         indices[i] = i;
     }
-    cout << "Baseline score=" << ScoreOrder(width, indices.data(), corr, params) << endl;
 
-    std::random_device rd;
-    std::mt19937 g(rd());
-
-    std::shuffle(indices.begin(), indices.begin() + width, g);
-    cout << "Shuffle#1 score=" << ScoreOrder(width, indices.data(), corr, params) << endl;
-
-    std::shuffle(indices.begin(), indices.begin() + width, g);
-    cout << "Shuffle#2 score=" << ScoreOrder(width, indices.data(), corr, params) << endl;
-
-    for (int i = 0; i < width; ++i) {
-        indices[i] = perm[i];
+    const int inv_perm_size = static_cast<int>( inv_perm.size() );
+    for (int i = 0; i < inv_perm_size; ++i) {
+        const int j = inv_perm[i];
+        indices[j] = i;
+        //cout << "(" << i << ", " << j << ")" << endl;
     }
-    cout << "Reverse Cuthill-McKee score=" << ScoreOrder(width, indices.data(), corr, params) << endl;
 
+    cout << "Reverse Cuthill-McKee score=" << ScoreOrder(width, indices.data(), corr) << endl;
     return indices;
 }
 
@@ -691,23 +699,42 @@ static void GenerateHeatmap(CorrelationMatrix& m)
     Correlation corr;
     corr.Calculate(m);
 
-    //std::vector<int> Indices = RCMOrder(corr);
-
     SAParams sa_params;
-#if 1
+
     std::vector<int> indices(width);
+
     for (int i = 0; i < width; ++i) {
         indices[i] = i;
     }
+    cout << "Unordered score=" << ScoreOrder(width, indices.data(), corr) << endl;
+
     std::sort(indices.begin(), indices.end(), [&](int i, int j) {
         return m.Get(i, i) < m.Get(j, j);
     });
+    cout << "Sorted score=" << ScoreOrder(width, indices.data(), corr) << endl;
+
+    std::random_device rd;
+    std::mt19937 g(rd());
+
+    std::shuffle(indices.begin(), indices.begin() + width, g);
+    cout << "Shuffle#1 score=" << ScoreOrder(width, indices.data(), corr) << endl;
+
+    std::shuffle(indices.begin(), indices.begin() + width, g);
+    cout << "Shuffle#2 score=" << ScoreOrder(width, indices.data(), corr) << endl;
+
+#if 1
+    RCMParams rcm_params;
+
+    for (int trials = 0; trials < 100; ++trials) {
+        rcm_params.start_index = g() % width;
+        indices = RCMOrder(m, corr, rcm_params);
+    }
 #else
     sa_params.max_move = m.MatrixWidth / 8;
-    std::vector<int> indices = SimulatedAnnealing(corr, sa_params);
+    indices = SimulatedAnnealing(corr, sa_params);
 #endif
 
-    double score = ScoreOrder(width, indices.data(), corr, sa_params);
+    double score = ScoreOrder(width, indices.data(), corr);
     cout << "Final score=" << score << endl;
 
     // Generate heatmap
@@ -726,10 +753,13 @@ static void GenerateHeatmap(CorrelationMatrix& m)
 
             // This is a value from -1..1
             //double r = corr.Get(i, j);
-            double r = corr.Get(row_i, col_j);
+            float r = corr.Get(row_i, col_j);
+
+            // Scale everything up to make things more visible
+            r *= 10.f;
 
             // Heat should be a value from -255..255
-            int heat = static_cast<int>( r * 255.0 );
+            int heat = static_cast<int>( r * 255.f );
 
             int offset_ij = i * width + j;
             if (heat >= 0) {
