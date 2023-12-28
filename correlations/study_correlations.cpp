@@ -30,19 +30,7 @@ public:
 
     int Width = -1;
 
-    /*
-        Correlation matrix is not symmetric.  For example P(J|I) != P(I|J)
-        meaning if neuron J fires, it may mean I fires more often than average,
-        but the reverse may not be true: If neuron I fires it may not cause
-        neuron J to fire any more often than normal.
-
-        If I is a row and J is a column, we store the matrix row-first:
-        The upper triangular matrix where J > I is storing P(J|I) - P(J).
-        The lower triangular matrix where I < J is storing P(I|J) - P(I).
-
-        So  "I implies J" or I -> J is in the upper right.
-        And "J implies I" or J -> I is in the lower left.
-    */
+    // Lower triangular correlation matrix
     float* RMatrix = nullptr;
     float LargestR = 0.0;
 
@@ -56,7 +44,6 @@ public:
     // Maximum seen histogram count for knowledge-classified neurons
     uint32_t MaxKnowledgeHistValue = 0;
 
-    // See the comment above for RMatrix to understand what this is.
     float Get(int i/*row*/, int j/*column*/) {
         if (j > i) {
             std::swap(i, j);
@@ -91,139 +78,6 @@ void Correlation::Calculate(CorrelationMatrix& m)
         StdDevs.resize(width);
         Means.resize(width);
     }
-
-#if 0
-    // Initialize RemapIndices
-    RemapIndices.resize(width);
-    for (int i = 0; i < width; ++i) {
-        RemapIndices[i] = i;
-    }
-
-    AutoEncoderNeurons.clear();
-
-    // Iterative algorithm to separate knowledge from auto-encoder neurons:
-
-    KnowledgeNeuronCount = width;
-    for (int i = 0; i < width; ++i) {
-        RemapIndices[i] = i;
-    }
-
-    for (int epoch = 0; epoch < 2; ++ epoch)
-    {
-        // Correlation matrix calculation
-
-        for (int i = 0; i < KnowledgeNeuronCount; ++i) {
-            const int row_i = RemapIndices[i];
-            // Calculate mean of row:
-
-            uint64_t sum_values = 0;
-
-            for (int j = 0; j < KnowledgeNeuronCount; ++j) {
-                const int col_j = RemapIndices[j];
-
-                sum_values += m.Get(row_i, col_j);
-            }
-
-            double mean = sum_values / (double)KnowledgeNeuronCount;
-            Means[row_i] = mean;
-
-            // Calculate standard deviation of row:
-
-            double sum_sd = 0.0;
-
-            // For each row:
-            for (int j = 0; j < KnowledgeNeuronCount; ++j) {
-                const int col_j = RemapIndices[j];
-
-                uint32_t value = m.Get(row_i, col_j);
-                double diff = value - mean;
-
-                sum_sd += diff * diff;
-            }
-
-            StdDevs[row_i] = std::sqrt(sum_sd / width);
-        }
-
-        if (epoch >= 1) {
-            break;
-        }
-
-        uint32_t max_value = 0;
-
-        // Each epoch we identify the ones that are most likely
-        // auto-encoder neurons, and move them to the end of the list,
-        // then do it again with the remaining neurons.
-        for (int i = 0; i < KnowledgeNeuronCount; ++i)
-        {
-            int positive = 0;
-
-            const int row_i = RemapIndices[i];
-            const int mean_i = (int)Means[row_i];
-
-            for (int j = 0; j < KnowledgeNeuronCount; ++j) {
-                if (i == j) {
-                    // Indices are unique so this is an equivalent faster test
-                    continue;
-                }
-
-                const int col_j = RemapIndices[j];
-                const int mean_j = (int)Means[col_j];
-                int value = m.Get(row_i, col_j);
-
-                if (value < mean_i && value < mean_j) {
-                    positive++;
-                } else {
-                    positive--;
-                }
-            }
-
-            if (positive < 0) {
-                AutoEncoderNeurons.push_back(row_i);
-            } else {
-                uint32_t value = m.Get(row_i, row_i);
-                if (max_value < value) {
-                    max_value = value;
-                }
-            }
-        }
-
-        // Sort auto-encoder neurons by how often they fire (just for fun)
-        std::sort(AutoEncoderNeurons.begin(), AutoEncoderNeurons.end(), [&](int i, int j) {
-            uint32_t hist_i = m.Get(i, i);
-            uint32_t hist_j = m.Get(j, j);
-            return hist_i > hist_j;
-        });
-
-        MaxKnowledgeHistValue = max_value;
-
-        // Reset the map
-        for (int i = 0; i < width; ++i) {
-            RemapIndices[i] = i;
-        }
-
-        // Move all selected to the end (in reverse order)
-        int count = 0;
-        for (int i : AutoEncoderNeurons) {
-            ++count;
-            std::swap(RemapIndices[width - count], RemapIndices[i]);
-        }
-
-        // Sort auto-encoder neurons by how often they fire (just for fun)
-        std::sort(RemapIndices.begin(), RemapIndices.end(), [&](int i, int j) {
-            uint32_t hist_i = m.Get(i, i);
-            uint32_t hist_j = m.Get(j, j);
-            return hist_i > hist_j;
-        });
-
-        AutoEncoderNeuronCount = count;
-        KnowledgeNeuronCount = width - AutoEncoderNeuronCount;
-
-        cout << "Epoch " << epoch << ":" << endl;
-        cout << "Max knowledge neuron histogram value: " << MaxKnowledgeHistValue << endl;
-        cout << "Auto-Encoder neurons(" << AutoEncoderNeuronCount << "/" << width
-            << ", " << (AutoEncoderNeuronCount * 100.f / width) << "%) identified" << endl;
-    }
-#endif
 
     const double inv_total = 1.0 / (double)m.TotalTrials;
 
@@ -307,8 +161,8 @@ void Correlation::Calculate(CorrelationMatrix& m)
                 // Choose C(I,J) = P(I|J) - P(I), for P(I) < P(J).
                 RMatrix[row_offset + j] = static_cast<float>( cond_p_i_given_j - p_i );
             }
-        }
-    }
+        } // next column
+    } // next row
 }
 
 struct KMeansParams
