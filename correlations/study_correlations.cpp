@@ -172,6 +172,130 @@ struct KMeansParams
     int diag_dist_score = 32;
 };
 
+/*
+    Fiedler Partitioning method: https://shainarace.github.io/LinearAlgebra/chap1-5.html
+    This algorithm is too slow to look for graph cuts, so we only run it on sub-graphs (dim<4000).
+    Rather than looking for graph cuts, we simply calculate the Fiedler vector (second Eigenvector),
+    and we note that sorting the indices will also sort the neurons by connectivity.
+
+    Provided with a subset of the indices to sort, and the correlation matrix for lookups.
+*/
+static bool FiedlerSort(int width, int* indices, Correlation& corr, float threshold) {
+    // Step 1: Construct the submatrix of the correlation matrix for the provided indices
+    MatrixXf corrSubmatrix(width, width);
+    for (int i = 0; i < width; ++i) {
+        for (int j = 0; j < width; ++j) {
+            corrSubmatrix(i, j) = corr.Get(indices[i], indices[j]);
+        }
+    }
+
+    // Step 2: Create the adjacency matrix by applying a threshold
+    // (Assuming a predefined threshold, can be adjusted)
+    MatrixXf A = (corrSubmatrix.array() > threshold).cast<float>();
+
+    // Step 3: Construct the Laplacian matrix from the adjacency matrix
+    VectorXf degrees = A.rowwise().sum();
+    MatrixXf D = degrees.asDiagonal();
+    MatrixXf L = D - A;
+    MatrixXd L_d = L.cast<double>();
+
+    // Step 4: Compute the eigenvalues and eigenvectors of the Laplacian matrix
+    SelfAdjointEigenSolver<MatrixXd> eigensolver(L_d);
+    if (eigensolver.info() != Success) {
+        // Handle the error appropriately
+        cerr << "Eigenvalue decomposition failed." << endl;
+        return false;
+    }
+
+    // Step 5: Extract the Fiedler vector (second eigenvector)
+    VectorXd fiedler_vector = eigensolver.eigenvectors().col(1);
+
+    // Step 6: Create pairs of indices and their associated Fiedler vector values for sorting
+    using pair_i2 = std::pair<int, int>;
+    vector<pair_i2> order(width);
+    for (int i = 0; i < width; ++i) {
+        order[i] = std::make_pair(i, indices[i]);
+    }
+
+    // Step 7: Sort the pairs based on the Fiedler vector values
+    sort(order.begin(), order.end(),
+        [&](const pair_i2& i, const pair_i2& j) {
+            return fiedler_vector(i.first) < fiedler_vector(j.first);
+        });
+
+    // Step 8: Write back the sorted indices
+    for (int i = 0; i < width; ++i) {
+        indices[i] = order[i].second;
+    }
+
+    return true;
+}
+
+int test_fiedler() {
+    // Step 1: Create a simple correlation matrix using floats
+    // Up to 4k seems reasonable
+    const int size = 1000;
+    MatrixXf C(size, size);
+
+    // Define correlation values
+    const float highCorrelation = 0.9f;
+    const float lowCorrelation = 0.4f;
+
+    for (int i = 0; i < size; ++i) {
+        for (int j = 0; j < size; ++j) {
+            if (i == j) {
+                C(i, j) = 1.0f; // Maximum correlation with itself
+            } else if (i % 2 == j % 2) {
+                C(i, j) = highCorrelation; // High correlation within the same set
+            } else {
+                C(i, j) = lowCorrelation; // Low correlation between different sets
+            }
+        }
+    }
+
+    cout << "C:" << endl << C.topLeftCorner(10, 10) << endl;
+
+    // Convert the correlation matrix into an adjacency matrix using floats
+    float threshold = 0.7f;
+    MatrixXf A = (C.array() > threshold).cast<float>();
+
+    cout << "A: \n" << A.topLeftCorner(10, 10) << endl;
+
+    // Step 2: Construct the Laplacian matrix using floats
+    VectorXf degrees = A.rowwise().sum(); // Sum of rows to get the degrees
+    MatrixXf L = degrees.asDiagonal();    // Degree matrix
+    L -= A;
+    MatrixXd LD = L.cast<double>();
+
+    cout << "L: \n" << L.topLeftCorner(10, 10) << endl;
+
+    std::cout << "Eigen version: " << EIGEN_WORLD_VERSION << "." << EIGEN_MAJOR_VERSION << "." << EIGEN_MINOR_VERSION << std::endl;
+    //std::cout << "Using the following Eigen backend: " << EIGEN_DEFAULT_DENSE_STORAGE_ORDER_OPTION << std::endl;
+
+    // Step 3: Compute eigenvalues and eigenvectors using floats
+    SelfAdjointEigenSolver<MatrixXd> eigensolver(LD);
+    if (eigensolver.info() != Success) {
+        cerr << "Eigenvalue decomposition failed." << endl;
+        return -1;
+    }
+
+    // Step 4: Extract eigenvalues and eigenvectors
+    //auto eigenvalues = eigensolver.eigenvalues();
+    auto eigenvectors = eigensolver.eigenvectors();
+
+    //cout << "eigenvalues:" << endl;
+    //cout << eigenvalues << endl;
+
+    //cout << "eigenvectors:" << endl;
+    //cout << eigenvectors << endl;
+
+    // Step 5: Fiedler vector is the eigenvector corresponding to the second smallest eigenvalue
+    cout << "Fiedler Vector: \n" << eigenvectors.col(1).transpose() << endl;
+
+    return 0;
+}
+
+
 static std::vector<int> KMeansReorder(int width, Correlation& corr, const KMeansParams& params = KMeansParams())
 {
     std::vector<int> indices(width), scores(width), centroids;
@@ -199,6 +323,8 @@ static std::vector<int> KMeansReorder(int width, Correlation& corr, const KMeans
 
         const int largest = indices[0];
     }
+
+    return indices;
 }
 
 struct SAParams
@@ -517,77 +643,9 @@ static void GenerateHeatmap(CorrelationMatrix& m)
     cv::imwrite(heatmap_filename, heatmap_image);
 }
 
-
-
-int test_fiedler() {
-    Eigen::initParallel();
-
-    // Step 1: Create a simple correlation matrix using floats
-    // Up to 4k seems reasonable
-    const int size = 1000;
-    MatrixXf C(size, size);
-
-    // Define correlation values
-    const float highCorrelation = 0.9f;
-    const float lowCorrelation = 0.4f;
-
-    for (int i = 0; i < size; ++i) {
-        for (int j = 0; j < size; ++j) {
-            if (i == j) {
-                C(i, j) = 1.0f; // Maximum correlation with itself
-            } else if (i % 2 == j % 2) {
-                C(i, j) = highCorrelation; // High correlation within the same set
-            } else {
-                C(i, j) = lowCorrelation; // Low correlation between different sets
-            }
-        }
-    }
-
-    cout << "C:" << endl << C.topLeftCorner(10, 10) << endl;
-
-    // Convert the correlation matrix into an adjacency matrix using floats
-    float threshold = 0.7f;
-    MatrixXf A = (C.array() > threshold).cast<float>();
-
-    cout << "A: \n" << A.topLeftCorner(10, 10) << endl;
-
-    // Step 2: Construct the Laplacian matrix using floats
-    VectorXf degrees = A.rowwise().sum(); // Sum of rows to get the degrees
-    MatrixXf L = degrees.asDiagonal();    // Degree matrix
-    L -= A;
-    MatrixXd LD = L.cast<double>();
-
-    cout << "L: \n" << L.topLeftCorner(10, 10) << endl;
-
-    std::cout << "Eigen version: " << EIGEN_WORLD_VERSION << "." << EIGEN_MAJOR_VERSION << "." << EIGEN_MINOR_VERSION << std::endl;
-    //std::cout << "Using the following Eigen backend: " << EIGEN_DEFAULT_DENSE_STORAGE_ORDER_OPTION << std::endl;
-
-    // Step 3: Compute eigenvalues and eigenvectors using floats
-    SelfAdjointEigenSolver<MatrixXd> eigensolver(LD);
-    if (eigensolver.info() != Success) {
-        cerr << "Eigenvalue decomposition failed." << endl;
-        return -1;
-    }
-
-    // Step 4: Extract eigenvalues and eigenvectors
-    //auto eigenvalues = eigensolver.eigenvalues();
-    auto eigenvectors = eigensolver.eigenvectors();
-
-    //cout << "eigenvalues:" << endl;
-    //cout << eigenvalues << endl;
-
-    //cout << "eigenvectors:" << endl;
-    //cout << eigenvectors << endl;
-
-    // Step 5: Fiedler vector is the eigenvector corresponding to the second smallest eigenvalue
-    cout << "Fiedler Vector: \n" << eigenvectors.col(1).transpose() << endl;
-
-    return 0;
-}
-
 int main(int argc, char* argv[])
 {
-    test_fiedler();
+    Eigen::initParallel();
 
     if (argc != 2) {
         cerr << "Expected: study_correlations file1.zstd" << endl;
