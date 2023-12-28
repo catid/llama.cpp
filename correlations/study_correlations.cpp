@@ -165,20 +165,15 @@ void Correlation::Calculate(CorrelationMatrix& m)
     } // next row
 }
 
-struct KMeansParams
-{
-    int max_epochs = 100;
-    float r_thresh = 0.05f;
-    int diag_dist_score = 32;
-};
-
 /*
     Fiedler Partitioning method: https://shainarace.github.io/LinearAlgebra/chap1-5.html
     This algorithm is too slow to look for graph cuts, so we only run it on sub-graphs (dim<4000).
-    Rather than looking for graph cuts, we simply calculate the Fiedler vector (second Eigenvector),
-    and we note that sorting the indices will also sort the neurons by connectivity.
 
-    Provided with a subset of the indices to sort, and the correlation matrix for lookups.
+    Rather than looking for graph cuts, we simply calculate the Fiedler vector (second Eigenvector),
+    and we observe that sorting the indices will also sort the neurons by connectivity.
+
+    Provided with a subset of the indices to sort, and the correlation matrix for lookups,
+    we sort the indices in-place.
 */
 static bool FiedlerSort(int width, int* indices, Correlation& corr, float threshold)
 {
@@ -222,6 +217,13 @@ static bool FiedlerSort(int width, int* indices, Correlation& corr, float thresh
 
     return true;
 }
+
+struct KMeansParams
+{
+    int max_epochs = 100;
+    float r_thresh = 0.05f;
+    int diag_dist_score = 32;
+};
 
 static std::vector<int> KMeansReorder(int width, Correlation& corr, const KMeansParams& params = KMeansParams())
 {
