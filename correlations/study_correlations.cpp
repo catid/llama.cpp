@@ -182,16 +182,14 @@ struct KMeansParams
 */
 static bool FiedlerSort(int width, int* indices, Correlation& corr, float threshold) {
     // Step 1: Construct the submatrix of the correlation matrix for the provided indices
-    MatrixXf corrSubmatrix(width, width);
+    // Only need to do lower triangle
+    MatrixXf A(width, width);
     for (int i = 0; i < width; ++i) {
-        for (int j = 0; j < width; ++j) {
-            corrSubmatrix(i, j) = corr.Get(indices[i], indices[j]);
+        for (int j = 0; j < i; ++j) {
+            const float r = corr.Get(indices[i], indices[j]);
+            A(i, j) = r > threshold ? 1.f : 0.f;
         }
     }
-
-    // Step 2: Create the adjacency matrix by applying a threshold
-    // (Assuming a predefined threshold, can be adjusted)
-    MatrixXf A = (corrSubmatrix.array() > threshold).cast<float>();
 
     // Step 3: Construct the Laplacian matrix from the adjacency matrix
     VectorXf degrees = A.rowwise().sum();
