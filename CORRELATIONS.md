@@ -6,7 +6,7 @@ To enable the experimental features, build with -DLLAMA_CORRELATIONS=ON:
 
 ```bash
 # All nodes are going to need these dependencies
-sudo apt install -y git cmake libzstd-dev pdsh libopencv-dev libboost-dev
+sudo apt install -y git cmake libzstd-dev pdsh libopencv-dev libboost-dev libeigen3-dev
 
 git clone https://github.com/catid/llama.cpp
 cd llama.cpp

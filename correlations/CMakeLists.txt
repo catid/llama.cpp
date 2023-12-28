@@ -28,6 +28,7 @@ else()
 endif()
 
 find_package(OpenCV REQUIRED)
+find_package(Eigen3 3.3 REQUIRED NO_MODULE)
 
 # study_correlations
 
@@ -38,7 +39,8 @@ add_executable(study_correlations
     compress.cpp
     compress.hpp
 )
-target_link_libraries(study_correlations PUBLIC zstd ${OpenCV_LIBS})
+target_include_directories(study_correlations PUBLIC ${MKL_INCLUDE_DIR})
+target_link_libraries(study_correlations PUBLIC zstd ${OpenCV_LIBS} Eigen3::Eigen)
 
 # sum_correlations
 

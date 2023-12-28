@@ -7,6 +7,10 @@
 #include <algorithm>
 using namespace std;
 
+// Tried MKL version and it fails(!)
+#include <Eigen/Eigenvalues>
+#include <Eigen/Dense>
+using namespace Eigen;
 
 static uint64_t SplitMix64(uint64_t& seed)
 {
@@ -304,6 +308,42 @@ void Correlation::Calculate(CorrelationMatrix& m)
                 RMatrix[row_offset + j] = static_cast<float>( cond_p_i_given_j - p_i );
             }
         }
+    }
+}
+
+struct KMeansParams
+{
+    int max_epochs = 100;
+    float r_thresh = 0.05f;
+    int diag_dist_score = 32;
+};
+
+static std::vector<int> KMeansReorder(int width, Correlation& corr, const KMeansParams& params = KMeansParams())
+{
+    std::vector<int> indices(width), scores(width), centroids;
+
+    for (int epoch = 0; epoch < params.max_epochs; ++epoch)
+    {
+        for (int i = 0; i < width; ++i) {
+            // We just count the number of correlated neurons
+            int score = 0;
+            for (int k = 0; k < width; ++k) {
+                float r = corr.Get(i, k);
+                if (r < params.r_thresh) {
+                    continue;
+                }
+                ++score;
+            }
+
+            indices[i] = i;
+            scores[i] = score;
+        }
+
+        std::sort(indices.begin(), indices.end(), [&](int i, int j) {
+            return scores[i] < scores[j];
+        });
+
+        const int largest = indices[0];
     }
 }
 
@@ -623,8 +663,78 @@ static void GenerateHeatmap(CorrelationMatrix& m)
     cv::imwrite(heatmap_filename, heatmap_image);
 }
 
+
+
+int test_fiedler() {
+    Eigen::initParallel();
+
+    // Step 1: Create a simple correlation matrix using floats
+    // Up to 4k seems reasonable
+    const int size = 1000;
+    MatrixXf C(size, size);
+
+    // Define correlation values
+    const float highCorrelation = 0.9f;
+    const float lowCorrelation = 0.4f;
+
+    for (int i = 0; i < size; ++i) {
+        for (int j = 0; j < size; ++j) {
+            if (i == j) {
+                C(i, j) = 1.0f; // Maximum correlation with itself
+            } else if (i % 2 == j % 2) {
+                C(i, j) = highCorrelation; // High correlation within the same set
+            } else {
+                C(i, j) = lowCorrelation; // Low correlation between different sets
+            }
+        }
+    }
+
+    cout << "C:" << endl << C.topLeftCorner(10, 10) << endl;
+
+    // Convert the correlation matrix into an adjacency matrix using floats
+    float threshold = 0.7f;
+    MatrixXf A = (C.array() > threshold).cast<float>();
+
+    cout << "A: \n" << A.topLeftCorner(10, 10) << endl;
+
+    // Step 2: Construct the Laplacian matrix using floats
+    VectorXf degrees = A.rowwise().sum(); // Sum of rows to get the degrees
+    MatrixXf L = degrees.asDiagonal();    // Degree matrix
+    L -= A;
+    MatrixXd LD = L.cast<double>();
+
+    cout << "L: \n" << L.topLeftCorner(10, 10) << endl;
+
+    std::cout << "Eigen version: " << EIGEN_WORLD_VERSION << "." << EIGEN_MAJOR_VERSION << "." << EIGEN_MINOR_VERSION << std::endl;
+    //std::cout << "Using the following Eigen backend: " << EIGEN_DEFAULT_DENSE_STORAGE_ORDER_OPTION << std::endl;
+
+    // Step 3: Compute eigenvalues and eigenvectors using floats
+    SelfAdjointEigenSolver<MatrixXd> eigensolver(LD);
+    if (eigensolver.info() != Success) {
+        cerr << "Eigenvalue decomposition failed." << endl;
+        return -1;
+    }
+
+    // Step 4: Extract eigenvalues and eigenvectors
+    //auto eigenvalues = eigensolver.eigenvalues();
+    auto eigenvectors = eigensolver.eigenvectors();
+
+    //cout << "eigenvalues:" << endl;
+    //cout << eigenvalues << endl;
+
+    //cout << "eigenvectors:" << endl;
+    //cout << eigenvectors << endl;
+
+    // Step 5: Fiedler vector is the eigenvector corresponding to the second smallest eigenvalue
+    cout << "Fiedler Vector: \n" << eigenvectors.col(1).transpose() << endl;
+
+    return 0;
+}
+
 int main(int argc, char* argv[])
 {
+    test_fiedler();
+
     if (argc != 2) {
         cerr << "Expected: study_correlations file1.zstd" << endl;
         return -1;
