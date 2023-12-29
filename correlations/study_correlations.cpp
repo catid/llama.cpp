@@ -325,8 +325,8 @@ static std::vector<int> KMeansReorder(int width, Correlation& corr, const KMeans
     std::vector<std::shared_ptr<Cluster>> clusters;
 
     auto first_cluster = std::make_shared<Cluster>();
-    first_cluster->indices.push_back(max_score_index);
-    first_cluster->indices.push_back(largest_r_index);
+    first_cluster->indices.push_back(index_to_row[max_score_index]);
+    first_cluster->indices.push_back(index_to_row[largest_r_index]);
     clusters.push_back(first_cluster);
 
     // Move these to the back
@@ -351,8 +351,7 @@ static std::vector<int> KMeansReorder(int width, Correlation& corr, const KMeans
             float score = -2.f;
 
             for (auto& cluster : clusters) {
-                for (int j : cluster->indices) {
-                    int row_cluster_index = index_to_row[j];
+                for (int row_cluster_index : cluster->indices) {
                     float r = corr.Get(row_i, row_cluster_index);
                     if (score < r) {
                         score = r;
@@ -385,15 +384,19 @@ static std::vector<int> KMeansReorder(int width, Correlation& corr, const KMeans
 
         cout << "Farthest index = " << min_score_index << " score=" << min_score << " and closest neighbor = " << largest_r_index << " score=" << largest_r << endl;
 
+        auto next_cluster = std::make_shared<Cluster>();
+        next_cluster->indices.push_back(index_to_row[min_score_index]);
+        next_cluster->indices.push_back(index_to_row[largest_r_index]);
+        clusters.push_back(next_cluster);
+
         // Move these to the back
         std::swap(index_to_row[min_score_index], index_to_row[--unassigned_count]);
         std::swap(index_to_row[largest_r_index], index_to_row[--unassigned_count]);
-
-        auto next_cluster = std::make_shared<Cluster>();
-        next_cluster->indices.push_back(min_score_index);
-        next_cluster->indices.push_back(largest_r_index);
-        clusters.push_back(next_cluster);
     } // next cluster centroid to find
+
+    cout << "Found " << clusters.size() << " clusters" << endl;
+
+    // Assign all the remaining neurons to different clusters:
 
     for (int i = 0; i < unassigned_count; ++i)
     {
@@ -407,8 +410,7 @@ static std::vector<int> KMeansReorder(int width, Correlation& corr, const KMeans
             auto& cluster = clusters[j];
             float score = -2.f;
 
-            for (int j : cluster->indices) {
-                int row_cluster_index = index_to_row[j];
+            for (int row_cluster_index : cluster->indices) {
                 float r = corr.Get(row_i, row_cluster_index);
                 if (score < r) {
                     score = r;
@@ -421,7 +423,7 @@ static std::vector<int> KMeansReorder(int width, Correlation& corr, const KMeans
             }
         }
 
-        clusters[max_score_cluster]->neurons.push_back(i);
+        clusters[max_score_cluster]->neurons.push_back(row_i);
     }
 
     for (;;)
@@ -453,10 +455,8 @@ static std::vector<int> KMeansReorder(int width, Correlation& corr, const KMeans
                 float score = -2.f;
 
                 for (int ci : cluster_i->indices) {
-                    int row_ci = index_to_row[ci];
                     for (int cj : cluster_j->indices) {
-                        int row_cj = index_to_row[cj];
-                        float r = corr.Get(row_ci, row_cj);
+                        float r = corr.Get(ci, cj);
                         if (score < r) {
                             score = r;
                         }
