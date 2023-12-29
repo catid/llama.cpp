@@ -307,7 +307,7 @@ static std::vector<int> KMeansReorder(int width, Correlation& corr, const KMeans
     }
 
     cout << "Found " << connected_count << "/" << corr.Width << " nodes with neighbors" << endl;
-
+#if 0
     // Find closest neighbor to pair with it
     float largest_r = -2.f;
     int largest_r_index = -1;
@@ -326,51 +326,56 @@ static std::vector<int> KMeansReorder(int width, Correlation& corr, const KMeans
             largest_r_index = i;
         }
     }
-
+#endif
     std::vector<std::shared_ptr<Cluster>> clusters;
 
     auto first_cluster = std::make_shared<Cluster>();
     first_cluster->indices.push_back(index_to_row[max_score_index]);
-    first_cluster->indices.push_back(index_to_row[largest_r_index]);
+    //first_cluster->indices.push_back(index_to_row[largest_r_index]);
     clusters.push_back(first_cluster);
 
     // Move these to the back
     int unassigned_count = connected_count;
     std::swap(index_to_row[max_score_index], index_to_row[--unassigned_count]);
-    std::swap(index_to_row[largest_r_index], index_to_row[--unassigned_count]);
+    //std::swap(index_to_row[largest_r_index], index_to_row[--unassigned_count]);
 
-    cout << "First cluster (best connected): " << max_score_index << " and " << largest_r_index << endl;
+    //cout << "First cluster (best connected): " << max_score_index << " and " << largest_r_index << endl;
 
     const int target_cluster_count = params.cluster_multiple * (unassigned_count + params.max_cluster_count/2) / params.max_cluster_count;
 
     cout << "Looking for " << target_cluster_count << "-1 cluster centers..." << endl;
 
+    // Perform K-means++ initialization:
+
     for (int cluster_index = 1; cluster_index < target_cluster_count; ++cluster_index)
     {
+        // Score distance from all remaining nodes to cluster centers
+
         float min_score = 2.f;
         int min_score_index = -1;
 
         for (int i = 0; i < unassigned_count; ++i)
         {
             int row_i = index_to_row[i];
-            float score = -2.f;
+            float max_score = -2.f;
 
             for (auto& cluster : clusters) {
                 for (int row_cluster_index : cluster->indices) {
                     float r = corr.Get(row_i, row_cluster_index);
-                    if (score < r) {
-                        score = r;
+                    if (max_score < r) {
+                        max_score = r;
                     }
                 }
             }
 
-            if (min_score > score) {
-                min_score = score;
+            if (min_score > max_score) {
+                min_score = max_score;
                 min_score_index = i;
             }
         }
-
+#if 0
         // Find closest neighbor to pair with it
+
         largest_r = -2.f;
         largest_r_index = -1;
         const int row_min_score_index = index_to_row[min_score_index];
@@ -386,17 +391,17 @@ static std::vector<int> KMeansReorder(int width, Correlation& corr, const KMeans
                 largest_r_index = i;
             }
         }
-
         cout << "Farthest index = " << min_score_index << " score=" << min_score << " and closest neighbor = " << largest_r_index << " score=" << largest_r << endl;
+#endif
 
         auto next_cluster = std::make_shared<Cluster>();
         next_cluster->indices.push_back(index_to_row[min_score_index]);
-        next_cluster->indices.push_back(index_to_row[largest_r_index]);
+        //next_cluster->indices.push_back(index_to_row[largest_r_index]);
         clusters.push_back(next_cluster);
 
         // Move these to the back
         std::swap(index_to_row[min_score_index], index_to_row[--unassigned_count]);
-        std::swap(index_to_row[largest_r_index], index_to_row[--unassigned_count]);
+        //std::swap(index_to_row[largest_r_index], index_to_row[--unassigned_count]);
     } // next cluster centroid to find
 
     // Add centroid indices to the list of neurons; these now contain a complete list of neurons in clusters
