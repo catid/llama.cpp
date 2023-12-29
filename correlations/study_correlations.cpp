@@ -221,10 +221,10 @@ static bool FiedlerSort(int width, int* indices, Correlation& corr, float thresh
 struct KMeansParams
 {
     int max_epochs = 100;
-    float r_thresh = 0.05f;
-    int diag_dist_score = 32;
-    int cluster_multiple = 32;
-    int max_cluster_count = 4000;
+    float cluster_thresh = 0.05f;
+    float fiedler_threshold = 0.05f;
+    int cluster_multiple = 16;
+    int max_cluster_count = 512;
 };
 
 struct Cluster
@@ -251,12 +251,16 @@ static std::vector<int> KMeansReorder(int width, Correlation& corr, const KMeans
 {
     // Find nodes without neighbors, and the node with the most neighbors:
 
-    std::vector<int> index_to_row(width), scores(width);
+    std::vector<int> index_to_row(width);
     int max_score = -1, max_score_index = -1;
+
+    int connected_count = width;
 
     for (int i = 0; i < width; ++i) {
         index_to_row[i] = i;
     }
+
+    int total_edges = 0;
 
     for (int i = 0; i < width; ++i)
     {
@@ -273,19 +277,18 @@ static std::vector<int> KMeansReorder(int width, Correlation& corr, const KMeans
             const int row_j = index_to_row[j];
 
             float r = corr.Get(row_i, row_j);
-            if (r < params.r_thresh) {
+            if (r < params.cluster_thresh) {
                 continue;
             }
 
+            ++total_edges;
             ++score;
         }
 
-        scores[i] = score;
-
         // Bump unconnected nodes to the end of the list so we do not consider them
         if (score == 0) {
-            --width;
-            std::swap(index_to_row[i], index_to_row[width]);
+            --connected_count;
+            std::swap(index_to_row[i], index_to_row[connected_count]);
             --i;
             continue;
         }
@@ -296,18 +299,20 @@ static std::vector<int> KMeansReorder(int width, Correlation& corr, const KMeans
         }
     }
 
-    if (max_score_index == -1 || width <= 0) {
+    cout << "Total number of correlation graph edges: " << total_edges << endl;
+
+    if (max_score_index == -1 || connected_count <= 0) {
         cerr << "Graph is empty!" << endl;
         return index_to_row;
     }
 
-    cout << "Found " << width << "/" << corr.Width << " nodes with neighbors" << endl;
+    cout << "Found " << connected_count << "/" << corr.Width << " nodes with neighbors" << endl;
 
     // Find closest neighbor to pair with it
     float largest_r = -2.f;
     int largest_r_index = -1;
     const int row_max_score_index = index_to_row[max_score_index];
-    for (int i = 0; i < width; ++i)
+    for (int i = 0; i < connected_count; ++i)
     {
         if (i == max_score_index) {
             continue;
@@ -330,7 +335,7 @@ static std::vector<int> KMeansReorder(int width, Correlation& corr, const KMeans
     clusters.push_back(first_cluster);
 
     // Move these to the back
-    int unassigned_count = width;
+    int unassigned_count = connected_count;
     std::swap(index_to_row[max_score_index], index_to_row[--unassigned_count]);
     std::swap(index_to_row[largest_r_index], index_to_row[--unassigned_count]);
 
@@ -394,30 +399,40 @@ static std::vector<int> KMeansReorder(int width, Correlation& corr, const KMeans
         std::swap(index_to_row[largest_r_index], index_to_row[--unassigned_count]);
     } // next cluster centroid to find
 
+    // Add centroid indices to the list of neurons; these now contain a complete list of neurons in clusters
+    for (auto& cluster : clusters) {
+        cluster->neurons.insert(cluster->neurons.end(), cluster->indices.begin(), cluster->indices.end());
+    }
+
     cout << "Found " << clusters.size() << " clusters" << endl;
 
     // Assign all the remaining neurons to different clusters:
-
-    for (int i = 0; i < unassigned_count; ++i)
+#if 1
+    for (int i = 0; i < width; ++i)
     {
+        // Skip over the ones we picked as centroids, and resume adding unconnected nodes
+        if (i >= unassigned_count && i < connected_count) {
+            continue;
+        }
+
         int row_i = index_to_row[i];
 
-        float max_score = -2.f;
+        double max_score = -2.0;
         int max_score_cluster = -1;
 
         const int cluster_count = static_cast<int>( clusters.size() );
         for (int j = 0; j < cluster_count; ++j) {
             auto& cluster = clusters[j];
-            float score = -2.f;
+            double score = 0.0;
 
-            for (int row_cluster_index : cluster->indices) {
+            for (int row_cluster_index : cluster->neurons) {
                 float r = corr.Get(row_i, row_cluster_index);
-                if (score < r) {
-                    score = r;
-                }
+                score += r;
             }
 
-            if (max_score < score) {
+            cout << "Neuron " << i << " : Cluster " << j << " score=" << score << endl;
+
+            if (max_score_cluster < 0 || max_score < score) {
                 max_score = score;
                 max_score_cluster = j;
             }
@@ -425,7 +440,9 @@ static std::vector<int> KMeansReorder(int width, Correlation& corr, const KMeans
 
         clusters[max_score_cluster]->neurons.push_back(row_i);
     }
-
+#endif
+    cout << "Assigned all neurons to clusters" << endl;
+#if 0
     for (;;)
     {
         int closest_i = -1, closest_j = -1;
@@ -436,7 +453,7 @@ static std::vector<int> KMeansReorder(int width, Correlation& corr, const KMeans
         {
             auto& cluster_i = clusters[i];
 
-            float max_score = -2.f;
+            double max_score = -2.0;
             int max_score_cluster = -1;
 
             for (int j = 0; j < cluster_count; ++j)
@@ -452,18 +469,16 @@ static std::vector<int> KMeansReorder(int width, Correlation& corr, const KMeans
                     continue;
                 }
 
-                float score = -2.f;
+                double score = 0.0;
 
-                for (int ci : cluster_i->indices) {
-                    for (int cj : cluster_j->indices) {
+                for (int ci : cluster_i->neurons) {
+                    for (int cj : cluster_j->neurons) {
                         float r = corr.Get(ci, cj);
-                        if (score < r) {
-                            score = r;
-                        }
+                        score += r;
                     }
                 }
 
-                if (max_score < score) {
+                if (max_score_cluster < 0 || max_score < score) {
                     max_score = score;
                     max_score_cluster = j;
                 }
@@ -497,20 +512,51 @@ static std::vector<int> KMeansReorder(int width, Correlation& corr, const KMeans
 
         cout << "Merged cluster " << closest_i << " with " << closest_j << " (" << cluster_i->neurons.size() << " neurons): " << clusters.size() << " clusters remain" << endl;
     } // next combination
-#if 0
-    std::vector<int> cluster_indices;
+#endif
+#if 1
+    const int cluster_count = static_cast<int>( clusters.size() );
+    for (int i = 0; i < cluster_count; ++i) {
+        auto& cluster_i = clusters[i];
+        cout << "Ordering cluster " << i << " (" << cluster_i->neurons.size() << ")" << endl;
+
+        double max_score = -2.0;
+        int max_score_cluster = -1;
+
+        for (int j = i+1; j < cluster_count; ++j) {
+            auto& cluster_j = clusters[j];
+
+            double score = 0.0;
+            for (int ci : cluster_i->neurons) {
+                for (int cj : cluster_j->neurons) {
+                    float r = corr.Get(ci, cj);
+                    score += r;
+                }
+            }
+
+            if (max_score_cluster < 0 || max_score < score) {
+                max_score = score;
+                max_score_cluster = j;
+            }
+        }
+
+        cout << "Neighbor " << max_score_cluster << endl;
+    }
+#endif
+    std::vector<int> sorted_indices;
 
     for (auto& cluster : clusters)
     {
-        FiedlerSort()
-
-        const int start = static_cast<int>( cluster_indices.size() );
-        cluster_indices.insert(cluster_indices.end(), cluster->indices.begin(), cluster->indices.end());
-        cluster_indices.insert(cluster_indices.end(), cluster->neurons.begin(), cluster->neurons.end());
-        const int end = static_cast<int>( cluster_indices.size() );
-    }
+#if 0
+        const int cluster_count = static_cast<int>( cluster->neurons.size() );
+        cout << "Fiedler sorting cluster with " << cluster_count << endl;
+        FiedlerSort(cluster_count, cluster->neurons.data(), corr, params.fiedler_threshold);
 #endif
-    return index_to_row;
+        sorted_indices.insert(sorted_indices.end(), cluster->neurons.begin(), cluster->neurons.end());
+    }
+
+    cout << "Sorting " << sorted_indices.size() << " neurons complete" << endl;
+
+    return sorted_indices;
 }
 
 struct SAParams
@@ -617,13 +663,9 @@ static void MoveIndex(int knowledge_count, int* indices, int i, int move)
 #include <random>
 #include <algorithm>
 
-static std::vector<int> SimulatedAnnealing(Correlation& corr, const SAParams& params)
+static void SimulatedAnnealing(std::vector<int>& indices, Correlation& corr, const SAParams& params)
 {
     const int width = corr.Width;
-    std::vector<int> indices(width);
-    for (int i = 0; i < width; ++i) {
-        indices[i] = i;
-    }
 
     // Shuffle indices to a random initial position
     std::random_device rd;
@@ -660,8 +702,6 @@ static std::vector<int> SimulatedAnnealing(Correlation& corr, const SAParams& pa
         double score = ScoreOrder(width, indices.data(), corr);
         cout << "Epoch " << epoch << " score=" << score << endl;
     }
-
-    return indices;
 }
 
 static void GenerateNeuronHistogram(CorrelationMatrix& m)
@@ -763,12 +803,13 @@ static void GenerateHeatmap(CorrelationMatrix& m)
     std::shuffle(indices.begin(), indices.begin() + width, g);
     cout << "Shuffle#2 score=" << ScoreOrder(width, indices.data(), corr) << endl;
 
+    indices = KMeansReorder(width, corr);
+
 #if 0
     SAParams sa_params;
     sa_params.max_move = m.MatrixWidth / 8;
-    indices = SimulatedAnnealing(corr, sa_params);
-#else
-    indices = KMeansReorder(width, corr);
+    sa_params.max_epochs = 100;
+    SimulatedAnnealing(indices, corr, sa_params);
 #endif
 
     double score = ScoreOrder(width, indices.data(), corr);
