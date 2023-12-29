@@ -486,7 +486,7 @@ static std::vector<int> KMeansReorder(int width, Correlation& corr, const KMeans
     }
 #endif
     cout << "Assigned all neurons to clusters" << endl;
-#if 1
+#if 0
     for (;;)
     {
         int closest_i = -1, closest_j = -1;
