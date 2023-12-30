@@ -430,7 +430,69 @@ static bool containsAllValues(const std::vector<int>& vec) {
 
     return true;
 }
-static int NeuronSortL1Error(std::vector<int>& neurons, Correlation& corr, float r_thresh)
+
+template <typename T>
+static size_t argmax(const std::vector<T>& v) {
+    return std::distance(v.begin(), std::max_element(v.begin(), v.end()));
+}
+
+/*
+    Possible ways to combine the two:
+
+    score0: 123 456
+    score1: 123 654
+    score2: 321 456
+    score3: 321 654
+
+    Try all 4 and see which one scores the best, and merge cluster1 into cluster0 using this order.
+*/
+static void MergeWithBestClusterOrder(std::vector<int>& cluster0, std::vector<int>& cluster1, Correlation& corr, float r_thresh)
+{
+    const int width0 = (int)cluster0.size();
+    const int width1 = (int)cluster1.size();
+
+    std::vector<int> scores(4);
+
+    for (int i = 0; i < width0; ++i) {
+        const int neuron0 = cluster0[i];
+
+        for (int j = 0; j < width1; ++j) {
+            const int neuron1 = cluster1[j];
+
+            float r = corr.Get(neuron0, neuron1);
+            if (r < r_thresh) {
+                continue;
+            }
+
+            scores[3] += (width0-1 - i) + j + 1;
+            scores[2] += (width0-1 - i) + (width0-1 - j);
+            scores[1] += i + (width1-1 - j) + 1;
+            scores[0] += i + j + 1;
+        }
+    }
+
+    int best_score = argmax(scores);
+    switch (best_score)
+    {
+    default:
+    case 0: // score0: 123 456
+        break;
+    case 1: // score1: 123 654
+        std::reverse(cluster1.begin(), cluster1.end());
+        break;
+    case 2: // score2: 321 456
+        std::reverse(cluster0.begin(), cluster0.end());
+        break;
+    case 3: // score3: 321 654
+        std::reverse(cluster0.begin(), cluster0.end());
+        std::reverse(cluster1.begin(), cluster1.end());
+        break;
+    }
+
+    cluster0.insert(cluster0.end(), cluster1.begin(), cluster1.end());
+}
+
+static int NeuronSortL1Loss(std::vector<int>& neurons, Correlation& corr, float r_thresh)
 {
     int score = 0;
 
@@ -451,6 +513,106 @@ static int NeuronSortL1Error(std::vector<int>& neurons, Correlation& corr, float
 
     return score;
 }
+
+#if 0
+
+static void SortCluster(Correlation& corr, std::shared_ptr<Cluster>& cluster, float r_thresh)
+{
+    const int cluster_neuron_count = static_cast<int>( cluster->neurons.size() );
+
+    // Find the best neighbor swaps that improve score
+
+    int loss = NeuronSortL1Loss(cluster->neurons, corr, r_thresh);
+
+    int swap_distance = cluster_neuron_count / 2 + 1;
+    if (swap_distance >= cluster_neuron_count) {
+        swap_distance = cluster_neuron_count - 1;
+    }
+
+    for (; swap_distance >= 1; --swap_distance)
+    {
+        for (int trials = 10; trials >= 0; --trials)
+        {
+            bool no_change = true;
+
+            for (int i = swap_distance; i < cluster_neuron_count; ++i) {
+                std::swap(cluster->neurons[i - swap_distance], cluster->neurons[i]);
+
+                int swap_loss = NeuronSortL1Loss(cluster->neurons, corr, r_thresh);
+
+                if (swap_loss > loss) {
+                    std::swap(cluster->neurons[i - swap_distance], cluster->neurons[i]);
+                } else {
+                    loss = swap_loss;
+                    no_change = false;
+                }
+            }
+
+            if (no_change) {
+                break;
+            }
+        }
+    }
+}
+
+#else
+
+static int HypotheticalSwapLoss(int idx1, int idx2, std::vector<int>& neurons, Correlation& corr, float r_thresh) {
+    int scoreChange = 0;
+
+    // Calculate the contribution to the score from the current positions
+    for (int i = 0; i < neurons.size(); ++i) {
+        if (i == idx1 || i == idx2) continue;
+        const int currentIdx = (i < idx1) ? i : idx1;
+        const int swapIdx = (i < idx2) ? i : idx2;
+
+        float rCurrent = corr.Get(neurons[idx1], neurons[currentIdx]);
+        float rSwap = corr.Get(neurons[idx2], neurons[swapIdx]);
+
+        if (rCurrent >= r_thresh) {
+            scoreChange -= std::abs(idx1 - i) - 1;
+        }
+        if (rSwap >= r_thresh) {
+            scoreChange += std::abs(idx2 - i) - 1;
+        }
+    }
+
+    // Factor in the direct swap between idx1 and idx2
+    float rDirectSwap = corr.Get(neurons[idx1], neurons[idx2]);
+    if (rDirectSwap >= r_thresh) {
+        scoreChange += std::abs(idx1 - idx2) - 1;  // Adding the score as they are now in correct order
+    }
+
+    return NeuronSortL1Loss(neurons, corr, r_thresh) + scoreChange;
+}
+
+static void SortCluster(Correlation& corr, std::shared_ptr<Cluster>& cluster, float r_thresh) {
+    const int cluster_neuron_count = static_cast<int>(cluster->neurons.size());
+
+    int loss = NeuronSortL1Loss(cluster->neurons, corr, r_thresh);
+    int swap_distance = cluster_neuron_count / 2;
+
+    while (swap_distance > 0) {
+        bool no_change = true;
+
+        for (int i = swap_distance; i < cluster_neuron_count; ++i) {
+            // Hypothetical swap loss calculation (modifying NeuronSortL1Error might be necessary)
+            int hypothetical_loss = HypotheticalSwapLoss(i, i - swap_distance, cluster->neurons, corr, r_thresh);
+
+            if (hypothetical_loss < loss) {
+                std::swap(cluster->neurons[i - swap_distance], cluster->neurons[i]);
+                loss = hypothetical_loss;
+                no_change = false;
+            }
+        }
+
+        if (no_change) {
+            swap_distance /= 2; // More aggressive reduction of swap_distance
+        }
+    }
+}
+
+#endif
 
 static std::vector<int> ClusterSortIndices(Correlation& corr, const ClusterSortIndicesParams& params = ClusterSortIndicesParams())
 {
@@ -591,10 +753,10 @@ static std::vector<int> ClusterSortIndices(Correlation& corr, const ClusterSortI
 
     cout << "Split off tiny clusters leaving " << cluster_count << " popular clusters" << endl;
 
+    // Produce initial cluster scores:
+
     // Lower triangular score matrix
     std::vector<float> cluster_pair_scores(cluster_count * (cluster_count + 1) / 2);
-
-    // Produce initial cluster scores:
 
     for (int i = 0; i < cluster_count; ++i) {
         auto& cluster_i = clusters[i];
@@ -732,55 +894,117 @@ static std::vector<int> ClusterSortIndices(Correlation& corr, const ClusterSortI
 
     cout << "Merged " << tiny_clusters.size() << " tiny clusters into " << cluster_count << " final clusters" << endl;
 
-    // Sort within clusters
+    // Produce final cluster scores:
 
-    for (int i = 0; i < cluster_count; ++i)
+    // Lower triangular score matrix
+    std::vector<float> final_pair_scores(cluster_count * (cluster_count + 1) / 2);
+
+    for (int i = 0; i < cluster_count; ++i) {
+        auto& cluster_i = clusters[i];
+        int row_offset = i * (i + 1) / 2;
+        for (int j = 0; j < i; ++j) {
+            auto& cluster_j = clusters[j];
+            float score = ScoreClusterMerge(corr, cluster_i, cluster_j, params.cluster_thresh);
+            final_pair_scores[row_offset + j] = score;
+        }
+    }
+
+    std::vector<bool> final_eliminated_clusters(cluster_count);
+    clusters_remaining = cluster_count;
+
+    for (int pair_index = 0;; ++pair_index)
     {
-        auto& cluster = clusters[i];
+        // Find largest pair score:
 
-        const int cluster_neuron_count = static_cast<int>( cluster->neurons.size() );
-        cout << "Sorting cluster " << i << " / " << cluster_count << " (" << cluster_neuron_count << " neurons)" << endl;
+        float max_pair_score = -2.f;
+        int max_pair_i = -1, max_pair_j = -1;
 
-        // Find the best neighbor swaps that improve score
-
-        int loss = NeuronSortL1Error(cluster->neurons, corr, params.sort_threshold);
-
-        for (int swap_distance = cluster_neuron_count - 1; swap_distance >= 1; --swap_distance)
-        {
-            for (int trials = 10; trials >= 0; --trials)
-            {
-                bool no_change = true;
-
-                for (int i = swap_distance; i < cluster_neuron_count; ++i) {
-                    std::swap(cluster->neurons[i - swap_distance], cluster->neurons[i]);
-
-                    int swap_loss = NeuronSortL1Error(cluster->neurons, corr, params.sort_threshold);
-
-                    if (swap_loss > loss) {
-                        std::swap(cluster->neurons[i - swap_distance], cluster->neurons[i]);
-                    } else {
-                        loss = swap_loss;
-                        no_change = false;
-                    }
+        for (int i = 0; i < cluster_count; ++i) {
+            int row_offset = i * (i + 1) / 2;
+            if (final_eliminated_clusters[i]) {
+                continue;
+            }
+            for (int j = 0; j < i; ++j) {
+                if (final_eliminated_clusters[j]) {
+                    continue;
                 }
-
-                if (no_change) {
-                    break;
+                const float score = final_pair_scores[row_offset + j];
+                if (max_pair_score < score) {
+                    max_pair_score = score;
+                    max_pair_i = i;
+                    max_pair_j = j;
                 }
+            }
+        }
+
+        // If no scores are good, meaning no clusters should be merged:
+        if (max_pair_score <= 0.0f) {
+            break;
+        }
+
+        auto cluster_i = clusters[max_pair_i];
+        auto cluster_j = clusters[max_pair_j];
+
+        --clusters_remaining;
+        cout << "Merging cluster (score=" << max_pair_score << ") " << max_pair_i << " with " << max_pair_j << " ("
+            << cluster_i->neurons.size() << "+" << cluster_j->neurons.size() << " neurons): "
+            << clusters_remaining << " clusters remain" << endl;
+
+        // Sort small cluster-pairs
+        if ((int)cluster_i->neurons.size() <= params.max_cluster_count*2 + 8) {
+            cout << "Thoroughly sorting small merged cluster..." << endl;
+
+            cluster_i->neurons.insert(cluster_i->neurons.end(), cluster_j->neurons.begin(), cluster_j->neurons.end());
+
+            SortCluster(corr, cluster_i, params.sort_threshold);
+        } else {
+            MergeWithBestClusterOrder(cluster_i->neurons, cluster_j->neurons, corr, params.sort_threshold);
+        }
+
+        final_eliminated_clusters[max_pair_j] = true;
+
+        // Update scores just for the merged cluster
+
+        for (int k = 0; k < cluster_count; ++k) {
+            if (final_eliminated_clusters[k]) {
+                continue;
+            }
+            auto& cluster_k = clusters[k];
+
+            float score = -2;
+
+            const int combined_size = (int)cluster_i->neurons.size() + (int)cluster_k->neurons.size();
+
+            if (combined_size <= 64) {
+                score = ScoreClusterMerge(corr, cluster_i, cluster_k, params.cluster_thresh);
+            }
+
+            if (k < max_pair_i) {
+                // Store at (i, k)
+                final_pair_scores[max_pair_i * (max_pair_i + 1) / 2 + k] = score;
+            } else {
+                // Store at (k, i)
+                final_pair_scores[k * (k + 1) / 2 + max_pair_i] = score;
             }
         }
     }
 
-#if 1
-    // FIXME: Use this to sort the clusters list
-#endif
+    // Remove dead clusters
+
+    for (int i = cluster_count - 1; i >= 0; --i) {
+        if (final_eliminated_clusters[i]) {
+            clusters.erase(clusters.begin() + i);
+        }
+    }
+    cluster_count = static_cast<int>( clusters.size() );
+
+    cout << "Merged final clusters into " << cluster_count << " clusters" << endl;
+
+    // Produce final list
 
     std::vector<int> sorted_indices;
-
-    for (int i = 0; i < cluster_count; ++i)
-    {
+    for (int i = 0; i < cluster_count; ++i) {
         auto& cluster = clusters[i];
-
         sorted_indices.insert(sorted_indices.end(), cluster->neurons.begin(), cluster->neurons.end());
     }
 
