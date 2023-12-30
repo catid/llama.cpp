@@ -165,492 +165,6 @@ void Correlation::Calculate(CorrelationMatrix& m)
     } // next row
 }
 
-/*
-    Fiedler Partitioning method: https://shainarace.github.io/LinearAlgebra/chap1-5.html
-    This algorithm is too slow to look for graph cuts, so we only run it on sub-graphs (dim<4000).
-
-    Rather than looking for graph cuts, we simply calculate the Fiedler vector (second Eigenvector),
-    and we observe that sorting the indices will also sort the neurons by connectivity.
-
-    Provided with a subset of the indices to sort, and the correlation matrix for lookups,
-    we sort the indices in-place.
-*/
-static bool FiedlerSort(int width, int* indices, Correlation& corr, float threshold)
-{
-    // Only need to do lower triangle
-    MatrixXf A(width, width);
-    for (int i = 0; i < width; ++i) {
-        for (int j = 0; j < i; ++j) {
-            const float r = corr.Get(indices[i], indices[j]);
-            A(i, j) = r > threshold ? 1.f : 0.f;
-        }
-    }
-
-    VectorXf degrees = A.rowwise().sum();
-    MatrixXf D = degrees.asDiagonal();
-    MatrixXf L = D - A;
-    MatrixXd L_d = L.cast<double>();
-
-    SelfAdjointEigenSolver<MatrixXd> eigensolver(L_d);
-    if (eigensolver.info() != Success) {
-        // Handle the error appropriately
-        cerr << "Eigenvalue decomposition failed." << endl;
-        return false;
-    }
-
-    VectorXd fiedler_vector = eigensolver.eigenvectors().col(1);
-
-    using pair_i2 = std::pair<int, int>;
-    vector<pair_i2> order(width);
-    for (int i = 0; i < width; ++i) {
-        order[i] = std::make_pair(i, indices[i]);
-    }
-
-    sort(order.begin(), order.end(),
-        [&](const pair_i2& i, const pair_i2& j) {
-            return fiedler_vector(i.first) < fiedler_vector(j.first);
-        });
-
-    for (int i = 0; i < width; ++i) {
-        indices[i] = order[i].second;
-    }
-
-    return true;
-}
-
-struct KMeansParams
-{
-    int max_epochs = 100;
-    float cluster_thresh = 0.05f;
-    float fiedler_threshold = 0.05f;
-    int cluster_multiple = 16;
-    int max_cluster_count = 512;
-};
-
-struct Cluster
-{
-    // Indices that represent the cluster (distance is taken relative to these)
-    std::vector<int> centroids;
-
-    // List of neurons in this cluster
-    std::vector<int> neurons;
-};
-
-// Rate of the value of merging two clusters from 0..1
-static float ScoreClusterMerge(
-    Correlation& corr,
-    const KMeansParams& params,
-    const std::shared_ptr<Cluster>& cluster_i,
-    const std::shared_ptr<Cluster>& cluster_j)
-{
-    int edge_count = 0;
-
-    for (int ci : cluster_i->neurons) {
-        for (int cj : cluster_j->neurons) {
-            float r = corr.Get(ci, cj);
-            if (r > params.cluster_thresh) {
-                edge_count++;
-            }
-        }
-    }
-
-    const int max_score = 2 * (int)cluster_i->neurons.size() * (int)cluster_j->neurons.size();
-
-    // What percentage of the combined space is filled?
-    const float score = edge_count / static_cast<float>( max_score );
-
-    return score;
-}
-
-/*
-    K-means++ initialization:
-
-        We pick clusters such that the number of elements are 
-
-    K-means:
-
-        Create K clusters by assigning each example to closest centroid.
-        Compute k new centroids by averaging examples in each cluster.
-        Stop when centroids stop changing.
-*/
-static std::vector<int> KMeansReorder(int width, Correlation& corr, const KMeansParams& params = KMeansParams())
-{
-    // Find nodes without neighbors, and the node with the most neighbors:
-
-    std::vector<int> index_to_row(width), scores(width);
-    int max_score = -1, max_score_index = -1;
-
-    int connected_count = width;
-
-    for (int i = 0; i < width; ++i) {
-        index_to_row[i] = i;
-    }
-
-    int total_edges = 0;
-
-    for (int i = 0; i < width; ++i)
-    {
-        const int row_i = index_to_row[i];
-
-        // We just count the number of correlated neurons
-        int score = 0;
-        for (int j = 0; j < width; ++j)
-        {
-            if (i == j) {
-                continue;
-            }
-
-            const int row_j = index_to_row[j];
-
-            float r = corr.Get(row_i, row_j);
-            if (r < params.cluster_thresh) {
-                continue;
-            }
-
-            ++total_edges;
-            ++score;
-        }
-
-        scores[i] = score;
-
-        // Bump unconnected nodes to the end of the list so we do not consider them
-        if (score == 0) {
-            --connected_count;
-            std::swap(index_to_row[i], index_to_row[connected_count]);
-            --i;
-            continue;
-        }
-
-        if (max_score < score) {
-            max_score = score;
-            max_score_index = i;
-        }
-    }
-
-    cout << "Total number of correlation graph edges: " << total_edges << endl;
-
-    if (max_score_index == -1 || connected_count <= 0) {
-        cerr << "Graph is empty!" << endl;
-        return index_to_row;
-    }
-
-    cout << "Found " << connected_count << "/" << corr.Width << " nodes with neighbors" << endl;
-#if 0
-    // Find closest neighbor to pair with it
-    float largest_r = -2.f;
-    int largest_r_index = -1;
-    const int row_max_score_index = index_to_row[max_score_index];
-    for (int i = 0; i < connected_count; ++i)
-    {
-        if (i == max_score_index) {
-            continue;
-        }
-
-        int row_i = index_to_row[i];
-
-        float r = corr.Get(row_i, row_max_score_index);
-        if (largest_r < r) {
-            largest_r = r;
-            largest_r_index = i;
-        }
-    }
-#endif
-
-    std::vector<std::shared_ptr<Cluster>> clusters;
-
-    auto first_cluster = std::make_shared<Cluster>();
-    first_cluster->centroids.push_back(index_to_row[max_score_index]);
-    //first_cluster->centroids.push_back(index_to_row[largest_r_index]);
-    clusters.push_back(first_cluster);
-
-    // Move these to the back
-    int unassigned_count = connected_count;
-    std::swap(index_to_row[max_score_index], index_to_row[--unassigned_count]);
-    //std::swap(index_to_row[largest_r_index], index_to_row[--unassigned_count]);
-
-    //cout << "First cluster (best connected): " << max_score_index << " and " << largest_r_index << endl;
-
-    const int target_cluster_count = params.cluster_multiple * (unassigned_count + params.max_cluster_count/2) / params.max_cluster_count;
-
-    cout << "Looking for " << target_cluster_count << "-1 cluster centers..." << endl;
-#if 1
-    std::vector<int> score_sorted(width);
-    for (int i = 0; i < width; ++i) {
-        score_sorted[i] = i;
-    }
-    std::sort(score_sorted.begin(), score_sorted.end(), [&](int i, int j) {
-        return scores[i] > scores[j];
-    });
-
-    for (int i = 0; i < unassigned_count; ++i) {
-        int row_i = index_to_row[i];
-
-        bool found = false;
-        for (auto& cluster : clusters) {
-            for (int row_cluster_index : cluster->centroids) {
-                float r = corr.Get(row_i, row_cluster_index);
-                if (r > params.cluster_thresh) {
-                    found = true;
-                    break;
-                }
-                if (found) {
-                    break;
-                }
-            }
-        }
-
-        if (!found) {
-            auto next_cluster = std::make_shared<Cluster>();
-            next_cluster->centroids.push_back(row_i);
-            clusters.push_back(next_cluster);
-
-            // Move these to the back
-            std::swap(index_to_row[i], index_to_row[--unassigned_count]);
-        }
-    }
-#else
-    // Perform K-means++ initialization:
-
-    for (int cluster_index = 1; cluster_index < target_cluster_count; ++cluster_index)
-    {
-        // Score distance from all remaining nodes to cluster centers
-
-        float min_score = 2.f;
-        int min_score_index = -1;
-
-        for (int i = 0; i < unassigned_count; ++i)
-        {
-            int row_i = index_to_row[i];
-            float max_score = -2.f;
-
-            for (auto& cluster : clusters) {
-                for (int row_cluster_index : cluster->centroids) {
-                    float r = corr.Get(row_i, row_cluster_index);
-                    if (max_score < r) {
-                        max_score = r;
-                    }
-                }
-            }
-
-            if (min_score > max_score) {
-                min_score = max_score;
-                min_score_index = i;
-            }
-        }
-#if 0
-        // Find closest neighbor to pair with it
-
-        largest_r = -2.f;
-        largest_r_index = -1;
-        const int row_min_score_index = index_to_row[min_score_index];
-        for (int i = 0; i < unassigned_count; ++i) {
-            if (i == min_score_index) {
-                continue;
-            }
-
-            int row_i = index_to_row[i];
-            float r = corr.Get(row_i, row_min_score_index);
-            if (largest_r < r) {
-                largest_r = r;
-                largest_r_index = i;
-            }
-        }
-        cout << "Farthest index = " << min_score_index << " score=" << min_score << " and closest neighbor = " << largest_r_index << " score=" << largest_r << endl;
-#endif
-
-        auto next_cluster = std::make_shared<Cluster>();
-        next_cluster->centroids.push_back(index_to_row[min_score_index]);
-        //next_cluster->centroids.push_back(index_to_row[largest_r_index]);
-        clusters.push_back(next_cluster);
-
-        // Move these to the back
-        std::swap(index_to_row[min_score_index], index_to_row[--unassigned_count]);
-        //std::swap(index_to_row[largest_r_index], index_to_row[--unassigned_count]);
-    } // next cluster centroid to find
-#endif
-
-    cout << "Found " << clusters.size() << " clusters" << endl;
-
-    // Add centroid indices to the list of neurons; these now contain a complete list of neurons in clusters
-    for (auto& cluster : clusters) {
-        cluster->neurons.insert(cluster->neurons.end(), cluster->centroids.begin(), cluster->centroids.end());
-    }
-
-    // Assign all the remaining neurons to different clusters:
-#if 1
-    for (int i = 0; i < width; ++i)
-    {
-        // Skip over the ones we picked as centroids, and resume adding unconnected nodes
-        if (i >= unassigned_count && i < connected_count) {
-            continue;
-        }
-
-        int row_i = index_to_row[i];
-
-        double max_score = -2.0;
-        int max_score_cluster = -1;
-
-        const int cluster_count = static_cast<int>( clusters.size() );
-        for (int j = 0; j < cluster_count; ++j) {
-            auto& cluster = clusters[j];
-            double score = 0.0;
-
-            for (int row_cluster_index : cluster->centroids) {
-                float r = corr.Get(row_i, row_cluster_index);
-                score += r;
-            }
-
-            //cout << "Neuron " << i << " : Cluster " << j << " score=" << score << endl;
-
-            if (max_score_cluster < 0 || max_score < score) {
-                max_score = score;
-                max_score_cluster = j;
-            }
-        }
-
-        clusters[max_score_cluster]->neurons.push_back(row_i);
-    }
-#endif
-    cout << "Assigned all neurons to clusters" << endl;
-    int cluster_count;
-
-    // Lower triangular score matrix
-    cluster_count = static_cast<int>( clusters.size() );
-    std::vector<float> cluster_pair_scores(cluster_count * (cluster_count + 1) / 2);
-
-    // Produce initial cluster scores:
-
-    for (int i = 0; i < cluster_count; ++i) {
-        auto& cluster_i = clusters[i];
-        int row_offset = i * (i + 1) / 2;
-        for (int j = 0; j < i; ++j) {
-            auto& cluster_j = clusters[j];
-            const float score = ScoreClusterMerge(corr, params, cluster_i, cluster_j);
-            cluster_pair_scores[row_offset + j] = score;
-        }
-    }
-
-    std::vector<bool> eliminated_clusters(cluster_count);
-    int clusters_remaining = cluster_count;
-
-    for (int pair_index = 0;; ++pair_index)
-    {
-        // Find largest pair score:
-
-        float max_pair_score = -2.f;
-        int max_pair_i = -1, max_pair_j = -1;
-
-        for (int i = 0; i < cluster_count; ++i) {
-            int row_offset = i * (i + 1) / 2;
-            if (eliminated_clusters[i]) {
-                continue;
-            }
-            for (int j = 0; j < i; ++j) {
-                if (eliminated_clusters[j]) {
-                    continue;
-                }
-                const float score = cluster_pair_scores[row_offset + j];
-                if (max_pair_score < score) {
-                    max_pair_score = score;
-                    max_pair_i = i;
-                    max_pair_j = j;
-                }
-            }
-        }
-
-        // If no scores are good, meaning no clusters should be merged:
-        if (max_pair_score < 0.01f) {
-            break;
-        }
-
-        auto cluster_i = clusters[max_pair_i];
-        auto cluster_j = clusters[max_pair_j];
-
-        cluster_i->centroids.insert(cluster_i->centroids.end(), cluster_j->centroids.begin(), cluster_j->centroids.end());
-        cluster_i->neurons.insert(cluster_i->neurons.end(), cluster_j->neurons.begin(), cluster_j->neurons.end());
-
-        --clusters_remaining;
-        cout << "Merged cluster (score=" << max_pair_score << ") " << max_pair_i << " with " << max_pair_j << " (" << cluster_i->neurons.size() << " neurons): " << clusters_remaining << " clusters remain" << endl;
-
-        eliminated_clusters[max_pair_j] = true;
-
-        // Update scores just for the merged cluster
-
-        for (int k = 0; k < cluster_count; ++k) {
-            if (eliminated_clusters[k]) {
-                continue;
-            }
-            auto& cluster_k = clusters[k];
-
-            float score = -2;
-
-            const int combined_size = (int)cluster_i->neurons.size() + (int)cluster_k->neurons.size();
-
-            if (combined_size <= 64) {
-                score = ScoreClusterMerge(corr, params, cluster_i, cluster_k);
-            }
-
-            if (k < max_pair_i) {
-                // Store at (i, k)
-                cluster_pair_scores[max_pair_i * (max_pair_i + 1) / 2 + k] = score;
-            } else {
-                // Store at (k, i)
-                cluster_pair_scores[k * (k + 1) / 2 + max_pair_i] = score;
-            }
-        }
-    }
-
-    // Remove dead clusters
-    for (int i = cluster_count - 1; i >= 0; --i) {
-        if (eliminated_clusters[i]) {
-            clusters.erase(clusters.begin() + i);
-        }
-    }
-
-#if 1
-    // FIXME: Use this to sort the clusters list
-#endif
-
-    std::vector<int> sorted_indices;
-
-    for (auto& cluster : clusters)
-    {
-        const int cluster_count = static_cast<int>( cluster->neurons.size() );
-        cout << "Sorting cluster with " << cluster_count << "..." << endl;
-
-        //if (cluster_count < 4 || !FiedlerSort(cluster_count, cluster->neurons.data(), corr, params.fiedler_threshold))
-        {
-            std::sort(cluster->neurons.begin(), cluster->neurons.end(), [&](int i, int j) {
-                double score_i = 0.0, score_j = 0.0;
-                for (int row_cluster_index : cluster->centroids) {
-                    score_i += corr.Get(i, row_cluster_index);
-                    score_j += corr.Get(j, row_cluster_index);
-                }
-                return score_i < score_j;
-            });
-
-            std::vector<int> zigzag;
-            int i = 0;
-            for (; i < cluster_count; i += 2) {
-                zigzag.push_back(cluster->neurons[i]);
-            }
-            if (cluster_count % 2) {
-                i = cluster_count - 2;
-            } else {
-                i = cluster_count - 1;
-            }
-            for (; i >= 0; i -= 2) {
-                zigzag.push_back(cluster->neurons[i]);
-            }
-            sorted_indices.insert(sorted_indices.end(), zigzag.begin(), zigzag.end());
-        }
-    }
-
-    cout << "Sorting " << sorted_indices.size() << " neurons complete" << endl;
-
-    return sorted_indices;
-}
-
 struct SAParams
 {
     int max_move = 5000;
@@ -757,7 +271,7 @@ static void MoveIndex(int knowledge_count, int* indices, int i, int move)
 
 static void SimulatedAnnealing(std::vector<int>& indices, Correlation& corr, const SAParams& params)
 {
-    const int width = corr.Width;
+    const int width = (int)indices.size();
 
     // Shuffle indices to a random initial position
     std::random_device rd;
@@ -791,9 +305,460 @@ static void SimulatedAnnealing(std::vector<int>& indices, Correlation& corr, con
             MoveIndex(width, indices.data(), i, move);
         }
 
-        double score = ScoreOrder(width, indices.data(), corr);
-        cout << "Epoch " << epoch << " score=" << score << endl;
+        //double score = ScoreOrder(width, indices.data(), corr);
+        //cout << "Epoch " << epoch << " score=" << score << endl;
     }
+}
+
+/*
+    Fiedler Partitioning method: https://shainarace.github.io/LinearAlgebra/chap1-5.html
+    This algorithm is too slow to look for graph cuts, so we only run it on sub-graphs (dim<4000).
+
+    Rather than looking for graph cuts, we simply calculate the Fiedler vector (second Eigenvector),
+    and we observe that sorting the indices will also sort the neurons by connectivity.
+
+    Provided with a subset of the indices to sort, and the correlation matrix for lookups,
+    we sort the indices in-place.
+*/
+static bool FiedlerSort(std::vector<int>& indices, Correlation& corr, float threshold)
+{
+    // Only need to do lower triangle
+    const int width = (int)indices.size();
+    MatrixXf A(width, width);
+    for (int i = 0; i < width; ++i) {
+        for (int j = 0; j < i; ++j) {
+            const float r = corr.Get(indices[i], indices[j]);
+            A(i, j) = r > threshold ? 1.f : 0.f;
+        }
+    }
+
+    VectorXf degrees = A.rowwise().sum();
+    MatrixXf D = degrees.asDiagonal();
+    MatrixXf L = D - A;
+    MatrixXd L_d = L.cast<double>();
+
+    SelfAdjointEigenSolver<MatrixXd> eigensolver(L_d);
+    if (eigensolver.info() != Success) {
+        // Handle the error appropriately
+        cerr << "Eigenvalue decomposition failed." << endl;
+        return false;
+    }
+
+    VectorXd fiedler_vector = eigensolver.eigenvectors().col(1);
+
+    using pair_i2 = std::pair<int, int>;
+    vector<pair_i2> order(width);
+    for (int i = 0; i < width; ++i) {
+        order[i] = std::make_pair(i, indices[i]);
+    }
+
+    sort(order.begin(), order.end(),
+        [&](const pair_i2& i, const pair_i2& j) {
+            return fiedler_vector(i.first) < fiedler_vector(j.first);
+        });
+
+    for (int i = 0; i < width; ++i) {
+        indices[i] = order[i].second;
+    }
+
+    return true;
+}
+
+struct KMeansParams
+{
+    int max_epochs = 100;
+    float cluster_thresh = 0.05f;
+    float sort_threshold = 0.05f;
+    int cluster_multiple = 16;
+    int max_cluster_count = 512;
+};
+
+struct Cluster
+{
+    // Indices that represent the cluster (distance is taken relative to these)
+    std::vector<int> centroids;
+
+    // List of neurons in this cluster
+    std::vector<int> neurons;
+};
+
+// Rate of the value of merging two clusters from 0..1
+static float ScoreClusterMerge(
+    Correlation& corr,
+    const KMeansParams& params,
+    const std::shared_ptr<Cluster>& cluster_i,
+    const std::shared_ptr<Cluster>& cluster_j)
+{
+    int edge_count = 0;
+
+    for (int ci : cluster_i->neurons) {
+        for (int cj : cluster_j->neurons) {
+            float r = corr.Get(ci, cj);
+            if (r > params.cluster_thresh) {
+                edge_count++;
+            }
+        }
+    }
+
+    const int max_score = 2 * (int)cluster_i->neurons.size() * (int)cluster_j->neurons.size();
+
+    // What percentage of the combined space is filled?
+    const float score = edge_count / static_cast<float>( max_score );
+
+    return score;
+}
+
+bool containsAllValues(const std::vector<int>& vec) {
+    int N = vec.size();
+    std::vector<bool> seen(N, false);
+
+    for (int num : vec) {
+        if (num < 0 || num >= N) {
+            // Number out of range
+            return false;
+        }
+        if (seen[num]) {
+            // Duplicate number found
+            return false;
+        }
+        seen[num] = true;
+    }
+
+    // If any number was not seen, return false
+    for (bool flag : seen) {
+        if (!flag) return false;
+    }
+
+    return true;
+}
+static int NeuronSortL1Error(std::vector<int>& neurons, Correlation& corr, float r_thresh)
+{
+    int score = 0;
+
+    const int width = (int)neurons.size();
+    for (int i = 0; i < width; ++i) {
+        const int row_i = neurons[i];
+        for (int j = 0; j < i; ++j) {
+            const int col_j = neurons[j];
+
+            float r = corr.Get(row_i, col_j);
+            if (r < r_thresh) {
+                continue;
+            }
+
+            score += i - j - 1;
+        }
+    }
+
+    return score;
+}
+
+static std::vector<int> KMeansReorder(int width, Correlation& corr, const KMeansParams& params = KMeansParams())
+{
+    // Find nodes without neighbors, and the node with the most neighbors:
+
+    std::vector<int> index_to_row(width), scores(width);
+    int max_score = -1, max_score_index = -1;
+
+    int connected_count = width;
+
+    for (int i = 0; i < width; ++i) {
+        index_to_row[i] = i;
+    }
+
+    int total_edges = 0;
+
+    for (int i = 0; i < width; ++i)
+    {
+        const int row_i = index_to_row[i];
+
+        // We just count the number of correlated neurons
+        int score = 0;
+        for (int j = 0; j < width; ++j)
+        {
+            if (i == j) {
+                continue;
+            }
+
+            const int row_j = index_to_row[j];
+
+            float r = corr.Get(row_i, row_j);
+            if (r < params.cluster_thresh) {
+                continue;
+            }
+
+            ++total_edges;
+            ++score;
+        }
+
+        scores[i] = score;
+
+        // Bump unconnected nodes to the end of the list so we do not consider them
+        if (score == 0) {
+            --connected_count;
+            std::swap(index_to_row[i], index_to_row[connected_count]);
+            --i;
+            continue;
+        }
+
+        if (max_score < score) {
+            max_score = score;
+            max_score_index = i;
+        }
+    }
+
+    cout << "Total number of correlation graph edges: " << total_edges << endl;
+
+    if (max_score_index == -1 || connected_count <= 0) {
+        cerr << "Graph is empty!" << endl;
+        return index_to_row;
+    }
+
+    cout << "Found " << connected_count << "/" << corr.Width << " nodes with neighbors" << endl;
+
+    std::vector<std::shared_ptr<Cluster>> clusters;
+
+    auto first_cluster = std::make_shared<Cluster>();
+    first_cluster->centroids.push_back(index_to_row[max_score_index]);
+    clusters.push_back(first_cluster);
+
+    // Move these to the back
+    int unassigned_count = connected_count;
+    std::swap(index_to_row[max_score_index], index_to_row[--unassigned_count]);
+
+    const int target_cluster_count = params.cluster_multiple * (unassigned_count + params.max_cluster_count/2) / params.max_cluster_count;
+
+    std::vector<int> score_sorted(width);
+    for (int i = 0; i < width; ++i) {
+        score_sorted[i] = i;
+    }
+    std::sort(score_sorted.begin(), score_sorted.end(), [&](int i, int j) {
+        return scores[i] > scores[j];
+    });
+
+    for (int i = 0; i < unassigned_count; ++i) {
+        int row_i = index_to_row[i];
+
+        bool found = false;
+        for (auto& cluster : clusters) {
+            for (int row_cluster_index : cluster->centroids) {
+                float r = corr.Get(row_i, row_cluster_index);
+                if (r > params.cluster_thresh) {
+                    found = true;
+                    break;
+                }
+                if (found) {
+                    break;
+                }
+            }
+        }
+
+        if (!found) {
+            auto next_cluster = std::make_shared<Cluster>();
+            next_cluster->centroids.push_back(row_i);
+            clusters.push_back(next_cluster);
+
+            // Move these to the back
+            std::swap(index_to_row[i], index_to_row[--unassigned_count]);
+        }
+    }
+
+    cout << "Found " << clusters.size() << " clusters" << endl;
+
+    // Add centroid indices to the list of neurons; these now contain a complete list of neurons in clusters
+    for (auto& cluster : clusters) {
+        cluster->neurons.insert(cluster->neurons.end(), cluster->centroids.begin(), cluster->centroids.end());
+    }
+
+    // Assign all the remaining neurons to different clusters:
+
+    for (int i = 0; i < width; ++i)
+    {
+        // Skip over the ones we picked as centroids, and resume adding unconnected nodes
+        if (i >= unassigned_count && i < connected_count) {
+            continue;
+        }
+
+        int row_i = index_to_row[i];
+
+        double max_score = -2.0;
+        int max_score_cluster = -1;
+
+        const int cluster_count = static_cast<int>( clusters.size() );
+        for (int j = 0; j < cluster_count; ++j) {
+            auto& cluster = clusters[j];
+            double score = 0.0;
+
+            for (int row_cluster_index : cluster->centroids) {
+                float r = corr.Get(row_i, row_cluster_index);
+                score += r;
+            }
+
+            //cout << "Neuron " << i << " : Cluster " << j << " score=" << score << endl;
+
+            if (max_score_cluster < 0 || max_score < score) {
+                max_score = score;
+                max_score_cluster = j;
+            }
+        }
+
+        clusters[max_score_cluster]->neurons.push_back(row_i);
+    }
+
+    cout << "Assigned all neurons to clusters" << endl;
+
+    // Lower triangular score matrix
+    int cluster_count = static_cast<int>( clusters.size() );
+    std::vector<float> cluster_pair_scores(cluster_count * (cluster_count + 1) / 2);
+
+    // Produce initial cluster scores:
+
+    for (int i = 0; i < cluster_count; ++i) {
+        auto& cluster_i = clusters[i];
+        int row_offset = i * (i + 1) / 2;
+        for (int j = 0; j < i; ++j) {
+            auto& cluster_j = clusters[j];
+            const float score = ScoreClusterMerge(corr, params, cluster_i, cluster_j);
+            cluster_pair_scores[row_offset + j] = score;
+        }
+    }
+
+    std::vector<bool> eliminated_clusters(cluster_count);
+    int clusters_remaining = cluster_count;
+
+    for (int pair_index = 0;; ++pair_index)
+    {
+        // Find largest pair score:
+
+        float max_pair_score = -2.f;
+        int max_pair_i = -1, max_pair_j = -1;
+
+        for (int i = 0; i < cluster_count; ++i) {
+            int row_offset = i * (i + 1) / 2;
+            if (eliminated_clusters[i]) {
+                continue;
+            }
+            for (int j = 0; j < i; ++j) {
+                if (eliminated_clusters[j]) {
+                    continue;
+                }
+                const float score = cluster_pair_scores[row_offset + j];
+                if (max_pair_score < score) {
+                    max_pair_score = score;
+                    max_pair_i = i;
+                    max_pair_j = j;
+                }
+            }
+        }
+
+        // If no scores are good, meaning no clusters should be merged:
+        if (max_pair_score < 0.0f) {
+            break;
+        }
+
+        auto cluster_i = clusters[max_pair_i];
+        auto cluster_j = clusters[max_pair_j];
+
+        cluster_i->centroids.insert(cluster_i->centroids.end(), cluster_j->centroids.begin(), cluster_j->centroids.end());
+        cluster_i->neurons.insert(cluster_i->neurons.end(), cluster_j->neurons.begin(), cluster_j->neurons.end());
+
+        --clusters_remaining;
+        cout << "Merged cluster (score=" << max_pair_score << ") " << max_pair_i << " with " << max_pair_j << " (" << cluster_i->neurons.size() << " neurons): " << clusters_remaining << " clusters remain" << endl;
+
+        eliminated_clusters[max_pair_j] = true;
+
+        // Update scores just for the merged cluster
+
+        for (int k = 0; k < cluster_count; ++k) {
+            if (eliminated_clusters[k]) {
+                continue;
+            }
+            auto& cluster_k = clusters[k];
+
+            float score = -2;
+
+            const int combined_size = (int)cluster_i->neurons.size() + (int)cluster_k->neurons.size();
+
+            if (combined_size <= 64) {
+                score = ScoreClusterMerge(corr, params, cluster_i, cluster_k);
+            }
+
+            if (k < max_pair_i) {
+                // Store at (i, k)
+                cluster_pair_scores[max_pair_i * (max_pair_i + 1) / 2 + k] = score;
+            } else {
+                // Store at (k, i)
+                cluster_pair_scores[k * (k + 1) / 2 + max_pair_i] = score;
+            }
+        }
+    }
+
+    // Remove dead clusters
+    for (int i = cluster_count - 1; i >= 0; --i) {
+        if (eliminated_clusters[i]) {
+            clusters.erase(clusters.begin() + i);
+        }
+    }
+
+    std::vector<int> sorted_indices;
+
+    for (auto& cluster : clusters)
+    {
+        const int cluster_neuron_count = static_cast<int>( cluster->neurons.size() );
+        cout << "Sorting cluster with " << cluster_neuron_count << "..." << endl;
+
+#if 0
+        SAParams sa_params;
+        sa_params.max_epochs = cluster_neuron_count * 2;
+        sa_params.max_move = cluster_neuron_count / 8 + 1;
+        sa_params.r_thresh = params.sort_threshold;
+
+        SimulatedAnnealing(cluster->neurons, corr, sa_params);
+#endif
+        // Find the best neighbor swaps that improve score
+
+        int loss = NeuronSortL1Error(cluster->neurons, corr, params.sort_threshold);
+        int loss_before = loss;
+
+        for (int swap_distance = cluster_neuron_count - 1; swap_distance >= 1; --swap_distance)
+        {
+            for (int trials = 10; trials >= 0; --trials)
+            {
+                bool no_change = true;
+
+                for (int i = swap_distance; i < cluster_neuron_count; ++i) {
+                    std::swap(cluster->neurons[i - swap_distance], cluster->neurons[i]);
+
+                    int swap_loss = NeuronSortL1Error(cluster->neurons, corr, params.sort_threshold);
+
+                    if (swap_loss > loss) {
+                        std::swap(cluster->neurons[i - swap_distance], cluster->neurons[i]);
+                    } else {
+                        loss = swap_loss;
+                        no_change = false;
+                    }
+                }
+
+                if (no_change) {
+                    break;
+                }
+            }
+        }
+
+        sorted_indices.insert(sorted_indices.end(), cluster->neurons.begin(), cluster->neurons.end());
+    }
+
+    cout << "Sorting " << sorted_indices.size() << " neurons complete" << endl;
+
+#if 1
+    // FIXME: Use this to sort the clusters list
+#endif
+
+    if (!containsAllValues(sorted_indices)) {
+        cout << "FIXME: containsAllValues = false" << endl;
+    }
+
+    return sorted_indices;
 }
 
 static void GenerateNeuronHistogram(CorrelationMatrix& m)
