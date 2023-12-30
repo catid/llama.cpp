@@ -572,7 +572,9 @@ static std::vector<int> ClusterSortIndices(Correlation& corr, const ClusterSortI
 
     cout << "Assigned all neurons to " << cluster_count << " clusters" << endl;
 
-    // Merge clusters that just have single neurons
+    // Split off all clusters with a tiny number of neurons
+
+    std::vector<std::shared_ptr<Cluster>> tiny_clusters;
 
     for (int i = 0; i < cluster_count; ++i) {
         auto& cluster_i = clusters[i];
@@ -580,44 +582,14 @@ static std::vector<int> ClusterSortIndices(Correlation& corr, const ClusterSortI
             continue;
         }
 
-        float max_score = -2.f;
-        int max_score_cluster = -1;
-
-        for (int j = 0; j < cluster_count; ++j) {
-            if (i == j) {
-                continue;
-            }
-            auto& cluster_j = clusters[j];
-
-            // Skip clusters that are already full
-            if ((int)cluster_j->neurons.size() >= params.max_cluster_count) {
-                continue;
-            }
-
-            // Check how correlated two clusters are
-            float score = ScoreClusterMerge(corr, cluster_i, cluster_j, params.cluster_thresh);
-
-            if (max_score < score) {
-                max_score = score;
-                max_score_cluster = j;
-            }
-        }
-
-        if (max_score_cluster < 0) {
-            continue;
-        }
-
-        auto& cluster_dest = clusters[max_score_cluster];
-
-        cluster_dest->centroids.insert(cluster_dest->centroids.end(), cluster_i->centroids.begin(), cluster_i->centroids.end());
-        cluster_dest->neurons.insert(cluster_dest->neurons.end(), cluster_i->neurons.begin(), cluster_i->neurons.end());
+        tiny_clusters.push_back(cluster_i);
 
         clusters.erase(clusters.begin() + i);
         --cluster_count;
         --i;
     }
 
-    cout << "Merged tiny clusters into " << cluster_count << " clusters" << endl;
+    cout << "Split off tiny clusters leaving " << cluster_count << " popular clusters" << endl;
 
     // Lower triangular score matrix
     std::vector<float> cluster_pair_scores(cluster_count * (cluster_count + 1) / 2);
@@ -720,6 +692,45 @@ static std::vector<int> ClusterSortIndices(Correlation& corr, const ClusterSortI
         }
     }
     cluster_count = static_cast<int>( clusters.size() );
+
+    cout << "Merged popular clusters into " << cluster_count << " clusters" << endl;
+
+    // Merge tiny clusters into popular clusters
+
+    for (auto& tiny_cluster : tiny_clusters) {
+        float max_score = -2.f;
+        int max_score_cluster = -1;
+
+        for (int j = 0; j < cluster_count; ++j) {
+            auto& cluster_j = clusters[j];
+
+            // Skip clusters that are already full
+            if ((int)cluster_j->neurons.size() >= params.max_cluster_count) {
+                continue;
+            }
+
+            // Check how correlated two clusters are
+            float score = ScoreClusterMerge(corr, tiny_cluster, cluster_j, params.cluster_thresh);
+
+            if (max_score < score) {
+                max_score = score;
+                max_score_cluster = j;
+            }
+        }
+
+        if (max_score < 0.f || max_score_cluster < 0) {
+            // Just append it
+            clusters.push_back(tiny_cluster);
+            continue;
+        }
+
+        auto& cluster_dest = clusters[max_score_cluster];
+
+        cluster_dest->neurons.insert(cluster_dest->neurons.end(), tiny_cluster->neurons.begin(), tiny_cluster->neurons.end());
+    }
+    cluster_count = static_cast<int>( clusters.size() );
+
+    cout << "Merged " << tiny_clusters.size() << " tiny clusters into " << cluster_count << " final clusters" << endl;
 
     // Sort within clusters
 
