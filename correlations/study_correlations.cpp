@@ -486,7 +486,126 @@ static std::vector<int> KMeansReorder(int width, Correlation& corr, const KMeans
     }
 #endif
     cout << "Assigned all neurons to clusters" << endl;
-#if 0
+    int cluster_count;
+#if 1
+    // Lower triangular score matrix
+    cluster_count = static_cast<int>( clusters.size() );
+    std::vector<float> cluster_pair_scores(cluster_count * (cluster_count + 1) / 2);
+
+    // Produce initial cluster scores:
+
+    for (int i = 0; i < cluster_count; ++i) {
+        auto& cluster_i = clusters[i];
+        int row_offset = i * (i + 1) / 2;
+
+        for (int j = 0; j < i; ++j) {
+            auto& cluster_j = clusters[j];
+
+            int edge_count = 0;
+
+            for (int ci : cluster_i->neurons) {
+                for (int cj : cluster_j->neurons) {
+                    float r = corr.Get(ci, cj);
+                    if (r > params.cluster_thresh) {
+                        edge_count++;
+                    }
+                }
+            }
+
+            const int max_score = 2 * (int)cluster_i->neurons.size() * (int)cluster_j->neurons.size();
+            const float score = edge_count / static_cast<float>( max_score );
+            cluster_pair_scores[row_offset + j] = score;
+        }
+    }
+
+    std::vector<bool> eliminated_clusters(cluster_count);
+    int clusters_remaining = cluster_count;
+
+    for (int pair_index = 0;; ++pair_index)
+    {
+        // Find largest pair score:
+
+        float max_pair_score = -2.f;
+        int max_pair_i = -1, max_pair_j = -1;
+
+        for (int i = 0; i < cluster_count; ++i) {
+            int row_offset = i * (i + 1) / 2;
+            if (eliminated_clusters[i]) {
+                continue;
+            }
+            for (int j = 0; j < i; ++j) {
+                if (eliminated_clusters[j]) {
+                    continue;
+                }
+                const float score = cluster_pair_scores[row_offset + j];
+                if (max_pair_score < score) {
+                    max_pair_score = score;
+                    max_pair_i = i;
+                    max_pair_j = j;
+                }
+            }
+        }
+
+        // If no scores are good, meaning no clusters should be merged:
+        if (max_pair_score < 0.f) {
+            break;
+        }
+
+        auto cluster_i = clusters[max_pair_i];
+        auto cluster_j = clusters[max_pair_j];
+
+        cluster_i->centroids.insert(cluster_i->centroids.end(), cluster_j->centroids.begin(), cluster_j->centroids.end());
+        cluster_i->neurons.insert(cluster_i->neurons.end(), cluster_j->neurons.begin(), cluster_j->neurons.end());
+
+        --clusters_remaining;
+        cout << "Merged cluster (score=" << max_pair_score << ") " << max_pair_i << " with " << max_pair_j << " (" << cluster_i->neurons.size() << " neurons): " << clusters_remaining << " clusters remain" << endl;
+
+        eliminated_clusters[max_pair_j] = true;
+
+        // Update scores just for the merged cluster
+
+        for (int k = 0; k < cluster_count; ++k) {
+            if (eliminated_clusters[k]) {
+                continue;
+            }
+            auto& cluster_k = clusters[k];
+
+            float score = -2;
+
+            const int combined_size = (int)cluster_i->neurons.size() + (int)cluster_k->neurons.size();
+
+            if (combined_size <= 64) {
+                int edge_count = 0;
+                for (int ci : cluster_i->neurons) {
+                    for (int ck : cluster_k->neurons) {
+                        float r = corr.Get(ci, ck);
+                        if (r > params.cluster_thresh) {
+                            edge_count++;
+                        }
+                    }
+                }
+
+                const int max_score = 2 * (int)cluster_i->neurons.size() * (int)cluster_k->neurons.size();
+                score = edge_count / static_cast<float>( max_score );
+            }
+
+            if (k < max_pair_i) {
+                // Store at (i, k)
+                cluster_pair_scores[max_pair_i * (max_pair_i + 1) / 2 + k] = score;
+            } else {
+                // Store at (k, i)
+                cluster_pair_scores[k * (k + 1) / 2 + max_pair_i] = score;
+            }
+        }
+    }
+
+    // Remove dead clusters
+    for (int i = cluster_count - 1; i >= 0; --i) {
+        if (eliminated_clusters[i]) {
+            clusters.erase(clusters.begin() + i);
+        }
+    }
+#else
     for (;;)
     {
         int closest_i = -1, closest_j = -1;
@@ -560,7 +679,7 @@ static std::vector<int> KMeansReorder(int width, Correlation& corr, const KMeans
     } // next combination
 #endif
 #if 1
-    const int cluster_count = static_cast<int>( clusters.size() );
+    cluster_count = static_cast<int>( clusters.size() );
     for (int i = 0; i < cluster_count; ++i) {
         auto& cluster_i = clusters[i];
         cout << "Ordering cluster " << i << " (" << cluster_i->neurons.size() << ")" << endl;
