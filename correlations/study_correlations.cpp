@@ -702,19 +702,13 @@ static std::vector<int> KMeansReorder(int width, Correlation& corr, const KMeans
 
     std::vector<int> sorted_indices;
 
-    for (auto& cluster : clusters)
+    for (int i = 0; i < cluster_count; ++i)
     {
+        auto& cluster = clusters[i];
+
         const int cluster_neuron_count = static_cast<int>( cluster->neurons.size() );
-        cout << "Sorting cluster with " << cluster_neuron_count << "..." << endl;
+        cout << "Sorting cluster " << i << " / " << cluster_count << " (" << cluster_neuron_count << " neurons)" << endl;
 
-#if 0
-        SAParams sa_params;
-        sa_params.max_epochs = cluster_neuron_count * 2;
-        sa_params.max_move = cluster_neuron_count / 8 + 1;
-        sa_params.r_thresh = params.sort_threshold;
-
-        SimulatedAnnealing(cluster->neurons, corr, sa_params);
-#endif
         // Find the best neighbor swaps that improve score
 
         int loss = NeuronSortL1Error(cluster->neurons, corr, params.sort_threshold);
