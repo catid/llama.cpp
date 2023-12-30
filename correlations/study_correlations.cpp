@@ -557,57 +557,37 @@ static void SortCluster(Correlation& corr, std::shared_ptr<Cluster>& cluster, fl
 
 #else
 
-static int HypotheticalSwapLoss(int idx1, int idx2, std::vector<int>& neurons, Correlation& corr, float r_thresh) {
-    int scoreChange = 0;
-
-    // Calculate the contribution to the score from the current positions
-    for (int i = 0; i < neurons.size(); ++i) {
-        if (i == idx1 || i == idx2) continue;
-        const int currentIdx = (i < idx1) ? i : idx1;
-        const int swapIdx = (i < idx2) ? i : idx2;
-
-        float rCurrent = corr.Get(neurons[idx1], neurons[currentIdx]);
-        float rSwap = corr.Get(neurons[idx2], neurons[swapIdx]);
-
-        if (rCurrent >= r_thresh) {
-            scoreChange -= std::abs(idx1 - i) - 1;
-        }
-        if (rSwap >= r_thresh) {
-            scoreChange += std::abs(idx2 - i) - 1;
-        }
-    }
-
-    // Factor in the direct swap between idx1 and idx2
-    float rDirectSwap = corr.Get(neurons[idx1], neurons[idx2]);
-    if (rDirectSwap >= r_thresh) {
-        scoreChange += std::abs(idx1 - idx2) - 1;  // Adding the score as they are now in correct order
-    }
-
-    return NeuronSortL1Loss(neurons, corr, r_thresh) + scoreChange;
-}
-
 static void SortCluster(Correlation& corr, std::shared_ptr<Cluster>& cluster, float r_thresh) {
     const int cluster_neuron_count = static_cast<int>(cluster->neurons.size());
 
     int loss = NeuronSortL1Loss(cluster->neurons, corr, r_thresh);
-    int swap_distance = cluster_neuron_count / 2;
+    int move_distance = cluster_neuron_count / 2;
 
-    while (swap_distance > 0) {
+    while (move_distance > 0) {
         bool no_change = true;
 
-        for (int i = swap_distance; i < cluster_neuron_count; ++i) {
-            // Hypothetical swap loss calculation (modifying NeuronSortL1Error might be necessary)
-            int hypothetical_loss = HypotheticalSwapLoss(i, i - swap_distance, cluster->neurons, corr, r_thresh);
+        for (int i = move_distance; i < cluster_neuron_count; ++i) {
+            // Perform the move
+            int neuron_to_move = cluster->neurons[i];
+            cluster->neurons.erase(cluster->neurons.begin() + i);
+            cluster->neurons.insert(cluster->neurons.begin() + i - move_distance, neuron_to_move);
 
-            if (hypothetical_loss < loss) {
-                std::swap(cluster->neurons[i - swap_distance], cluster->neurons[i]);
-                loss = hypothetical_loss;
+            // Calculate loss after the move
+            int new_loss = NeuronSortL1Loss(cluster->neurons, corr, r_thresh);
+
+            if (new_loss < loss) {
+                // If the new configuration is better, update the loss and mark as change
+                loss = new_loss;
                 no_change = false;
+            } else {
+                // Move was not beneficial, reverse it
+                cluster->neurons.erase(cluster->neurons.begin() + i - move_distance);
+                cluster->neurons.insert(cluster->neurons.begin() + i, neuron_to_move);
             }
         }
 
         if (no_change) {
-            swap_distance /= 2; // More aggressive reduction of swap_distance
+            move_distance /= 2; // More aggressive reduction of move_distance
         }
     }
 }
