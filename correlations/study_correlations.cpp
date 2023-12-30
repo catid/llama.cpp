@@ -595,7 +595,7 @@ static std::vector<int> ClusterSortIndices(Correlation& corr, const ClusterSortI
             }
 
             // Check how correlated two clusters are
-            float score = ScoreClusterMerge(corr, cluster_i, cluster_j);
+            float score = ScoreClusterMerge(corr, cluster_i, cluster_j, params.cluster_thresh);
 
             if (max_score < score) {
                 max_score = score;
