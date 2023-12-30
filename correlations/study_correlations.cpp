@@ -170,7 +170,7 @@ struct ClusterSortIndicesParams
     float cluster_thresh = 0.05f;
     float sort_threshold = 0.05f;
     int cluster_multiple = 16;
-    int max_cluster_count = 64;
+    int max_cluster_count = 128;
 };
 
 struct Cluster
@@ -317,6 +317,7 @@ static int NeuronSortL1Loss(std::vector<int>& neurons, Correlation& corr, float 
 
 static void SortCluster(Correlation& corr, std::shared_ptr<Cluster>& cluster, float r_thresh) {
     const int cluster_neuron_count = static_cast<int>(cluster->neurons.size());
+    cout << "Aggressively sorting cluster with " << cluster_neuron_count << " neurons..." << endl;
 
     int loss = NeuronSortL1Loss(cluster->neurons, corr, r_thresh);
     int move_distance = cluster_neuron_count / 2;
@@ -630,7 +631,13 @@ static std::vector<int> ClusterSortIndices(Correlation& corr, const ClusterSortI
 
     cout << "Merged " << tiny_clusters.size() << " tiny clusters into " << cluster_count << " final clusters" << endl;
 
-    // Produce final cluster scores:
+    // Sort clusters
+
+    for (auto& cluster : clusters) {
+        SortCluster(corr, cluster, params.sort_threshold);
+    }
+
+    // Produce final cluster scores
 
     // Lower triangular score matrix
     std::vector<float> final_pair_scores(cluster_count * (cluster_count + 1) / 2);
@@ -687,16 +694,7 @@ static std::vector<int> ClusterSortIndices(Correlation& corr, const ClusterSortI
             << cluster_i->neurons.size() << "+" << cluster_j->neurons.size() << " neurons): "
             << clusters_remaining << " clusters remain" << endl;
 
-        // Sort small cluster-pairs
-        if ((int)cluster_i->neurons.size() <= params.max_cluster_count*2 + 8) {
-            cout << "Thoroughly sorting small merged cluster..." << endl;
-
-            cluster_i->neurons.insert(cluster_i->neurons.end(), cluster_j->neurons.begin(), cluster_j->neurons.end());
-
-            SortCluster(corr, cluster_i, params.sort_threshold);
-        } else {
-            MergeWithBestClusterOrder(cluster_i->neurons, cluster_j->neurons, corr, params.sort_threshold);
-        }
+        MergeWithBestClusterOrder(cluster_i->neurons, cluster_j->neurons, corr, params.sort_threshold);
 
         final_eliminated_clusters[max_pair_j] = true;
 
@@ -708,13 +706,7 @@ static std::vector<int> ClusterSortIndices(Correlation& corr, const ClusterSortI
             }
             auto& cluster_k = clusters[k];
 
-            float score = -2;
-
-            const int combined_size = (int)cluster_i->neurons.size() + (int)cluster_k->neurons.size();
-
-            if (combined_size <= 64) {
-                score = ScoreClusterMerge(corr, cluster_i, cluster_k, params.cluster_thresh);
-            }
+            float score = ScoreClusterMerge(corr, cluster_i, cluster_k, params.cluster_thresh);
 
             if (k < max_pair_i) {
                 // Store at (i, k)
