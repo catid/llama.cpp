@@ -529,7 +529,7 @@ static std::vector<int> ClusterSortIndices(Correlation& corr, const ClusterSortI
                 if (eliminated_clusters[j]) {
                     continue;
                 }
-                if ((int)clusters[i]->neurons.size() + (int)clusters[i]->neurons.size() > params.max_cluster_count) {
+                if ((int)clusters[i]->neurons.size() + (int)clusters[j]->neurons.size() > params.max_cluster_count) {
                     continue;
                 }
                 const float score = cluster_pair_scores[row_offset + j];
