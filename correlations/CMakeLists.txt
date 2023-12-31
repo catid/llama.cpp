@@ -30,18 +30,6 @@ endif()
 find_package(OpenCV REQUIRED)
 find_package(Eigen3 3.3 REQUIRED NO_MODULE)
 
-# study_correlations
-
-add_executable(study_correlations
-    study_correlations.cpp
-    mmapfile.cpp
-    mmapfile.hpp
-    compress.cpp
-    compress.hpp
-)
-target_include_directories(study_correlations PUBLIC ${MKL_INCLUDE_DIR})
-target_link_libraries(study_correlations PUBLIC zstd ${OpenCV_LIBS} Eigen3::Eigen)
-
 # sum_correlations
 
 add_executable(sum_correlations
@@ -52,3 +40,17 @@ add_executable(sum_correlations
     compress.hpp
 )
 target_link_libraries(sum_correlations PUBLIC zstd)
+
+# study_co_activations
+
+add_executable(study_co_activations
+study_co_activations.cpp
+    mmapfile.cpp
+    mmapfile.hpp
+    compress.cpp
+    compress.hpp
+    co_activations.cpp
+    co_activations.hpp
+)
+target_include_directories(study_co_activations PUBLIC ${MKL_INCLUDE_DIR})
+target_link_libraries(study_co_activations PUBLIC zstd ${OpenCV_LIBS} Eigen3::Eigen)

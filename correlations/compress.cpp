@@ -233,7 +233,7 @@ bool CorrelationMatrix_UnitTest()
         return false;
     }
     for (int i = 0; i < elements; ++i) {
-        if (m.Data[i] != elements + i) {
+        if ((int)m.Data[i] != elements + i) {
             cerr << "Data corrupted at " << i << endl;
             return false;
         }

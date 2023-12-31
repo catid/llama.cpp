@@ -109,13 +109,13 @@ After all the data is collected, you can delete the intermediate results from al
 python scripts/delete_correlations.py
 ```
 
-Finally you can produce pretty correlation graphs by running:
+The next step is to study the co-activations between neurons in the FeedForward networks:
 
 ```bash
-python scripts/study_correlations.py
+python scripts/study_co_activations.py
 ```
 
-This reads the files from `outputs` and generates `.png` heatmaps to visualize the full data, and provides interesting aggregated statistics about the data that can be graphed using other tools.  It uses the built `./build/bin/study_correlations` C++ application for speed.
+This reads the files from `outputs` and generates `.png` histograms/heatmaps to visualize the neuron co-activations in each block.  This script also produces a `.coact` binary file that stores a representation of the neuron correlations that can be queried efficiently using the `correlations/co_activations.hpp` library.  It uses the built `./build/bin/study_co_activations` C++ application for speed.
 
 
 ## Why is this useful?
