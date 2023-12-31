@@ -182,28 +182,81 @@ struct Cluster
     std::vector<int> neurons;
 };
 
+static int CountCorrelatedColumns(
+    int i,
+    const std::vector<int>& neurons_j,
+    Correlation& corr,
+    float cluster_thresh)
+{
+    int edge_count = 0;
+
+    const int cj_count = (int)neurons_j.size();
+    const int max_edge_check = 64;
+
+    int cj = 0;
+    for (; cj < cj_count && cj < max_edge_check; ++cj) {
+        float r = corr.Get(i, neurons_j[cj]);
+        if (r > cluster_thresh) {
+            edge_count++;
+        }
+    }
+
+    // Skip middle
+    cj = std::max(cj_count - max_edge_check, cj);
+
+    for (; cj < cj_count; ++cj) {
+        float r = corr.Get(i, neurons_j[cj]);
+        if (r > cluster_thresh) {
+            edge_count++;
+        }
+    }
+
+    return edge_count;
+}
+
 // Rate of the value of merging two clusters from 0..1
 static float ScoreClusterMerge(
     Correlation& corr,
-    const std::shared_ptr<Cluster>& cluster_i,
-    const std::shared_ptr<Cluster>& cluster_j,
+    const std::vector<int>& neurons_i,
+    const std::vector<int>& neurons_j,
     float cluster_thresh = -2.f)
 {
     int edge_count = 0;
 
-    for (int ci : cluster_i->neurons) {
-        for (int cj : cluster_j->neurons) {
-            float r = corr.Get(ci, cj);
-            if (r > cluster_thresh) {
-                edge_count++;
+    const int ci_count = (int)neurons_i.size();
+    const int cj_count = (int)neurons_j.size();
+    const int max_edge_check = 64;
+
+    // If it is worth the time to cut out the middle:
+    if (ci_count > max_edge_check * 3 || cj_count > max_edge_check * 3) {
+        int ci = 0;
+        for (; ci < ci_count && ci < max_edge_check; ++ci) {
+            const int i = neurons_i[ci];
+
+            edge_count += CountCorrelatedColumns(i, neurons_j, corr, cluster_thresh);
+        }
+
+        // Skip middle
+        ci = std::max(ci_count - max_edge_check, ci);
+
+        for (; ci < ci_count; ++ci) {
+            const int i = neurons_i[ci];
+
+            edge_count += CountCorrelatedColumns(i, neurons_j, corr, cluster_thresh);
+        }
+    } else {
+        for (int ci : neurons_i) {
+            for (int cj : neurons_j) {
+                float r = corr.Get(ci, cj);
+                if (r > cluster_thresh) {
+                    edge_count++;
+                }
             }
         }
     }
 
-    const int max_score = 2 * (int)cluster_i->neurons.size() * (int)cluster_j->neurons.size();
-
-    // What percentage of the combined space is filled?
-    const float score = edge_count / static_cast<float>( max_score );
+    // What percentage of the combined space would be filled?
+    const float score = edge_count / static_cast<float>( 2 * ci_count * cj_count );
 
     return score;
 }
@@ -503,7 +556,7 @@ static std::vector<int> ClusterSortIndices(Correlation& corr, const ClusterSortI
 
             float score = -1;
             if ((int)cluster_i->neurons.size() + (int)cluster_j->neurons.size() <= params.max_cluster_count) {
-                score = ScoreClusterMerge(corr, cluster_i, cluster_j, params.cluster_thresh);
+                score = ScoreClusterMerge(corr, cluster_i->neurons, cluster_j->neurons, params.cluster_thresh);
             }
 
             cluster_pair_scores[row_offset + j] = score;
@@ -570,7 +623,7 @@ static std::vector<int> ClusterSortIndices(Correlation& corr, const ClusterSortI
             const int combined_size = (int)cluster_i->neurons.size() + (int)cluster_k->neurons.size();
 
             if (combined_size <= 64) {
-                score = ScoreClusterMerge(corr, cluster_i, cluster_k, params.cluster_thresh);
+                score = ScoreClusterMerge(corr, cluster_i->neurons, cluster_k->neurons, params.cluster_thresh);
             }
 
             if (k < max_pair_i) {
@@ -609,7 +662,7 @@ static std::vector<int> ClusterSortIndices(Correlation& corr, const ClusterSortI
             }
 
             // Check how correlated two clusters are
-            float score = ScoreClusterMerge(corr, tiny_cluster, cluster_j, params.cluster_thresh);
+            float score = ScoreClusterMerge(corr, tiny_cluster->neurons, cluster_j->neurons, params.cluster_thresh);
 
             if (max_score < score) {
                 max_score = score;
@@ -647,7 +700,7 @@ static std::vector<int> ClusterSortIndices(Correlation& corr, const ClusterSortI
         int row_offset = i * (i + 1) / 2;
         for (int j = 0; j < i; ++j) {
             auto& cluster_j = clusters[j];
-            float score = ScoreClusterMerge(corr, cluster_i, cluster_j, params.cluster_thresh);
+            float score = ScoreClusterMerge(corr, cluster_i->neurons, cluster_j->neurons, params.cluster_thresh);
             final_pair_scores[row_offset + j] = score;
         }
     }
@@ -706,7 +759,7 @@ static std::vector<int> ClusterSortIndices(Correlation& corr, const ClusterSortI
             }
             auto& cluster_k = clusters[k];
 
-            float score = ScoreClusterMerge(corr, cluster_i, cluster_k, params.cluster_thresh);
+            float score = ScoreClusterMerge(corr, cluster_i->neurons, cluster_k->neurons, params.cluster_thresh);
 
             if (k < max_pair_i) {
                 // Store at (i, k)
