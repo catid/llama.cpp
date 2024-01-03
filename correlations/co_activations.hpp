@@ -30,6 +30,9 @@ public:
     // that neurons that often fire together are neighbors.
     uint16_t* NeuronOrder = nullptr;
 
+    // Inverse of NeuronOrder
+    std::vector<uint16_t> NeuronOrderInverse;
+
     // Number of correlated neighbors ahead (in index order after sorting).
     uint8_t* NeighborsAbove = nullptr;
 
@@ -40,8 +43,40 @@ public:
     uint8_t* MegaCluster = nullptr;
 
     // Load the .coact file produced by the `study_co_activations` application.
-    bool ReadFile(const std::string& file_path);
+    // On `calculate_inverse = true` this will fill NeuronOrderInverse.
+    bool ReadFile(const std::string& file_path, bool calculate_inverse = true);
+
+    /*
+        Example usage:
+
+        Reset()
+
+            The Reset() function will clear internal state.
+
+        For each neuron that fires in the initial set:
+            AddNeighbors(neuron_index)
+
+            This should be the sorted index given by NeuronOrder[].
+            If you have not yet sorted your model weights,
+            pass in neuron_index = NeuronOrder[original_neuron_index].
+
+        The list of neurons that are neighbors is stored in the `Neighbors` member.
+        It is fine to call Neighbors.clear() between calls to AddNeighbors().
+    */
+    void Reset();
+
+    // Returns the number of neurons added to the Neighbors list.
+    int AddNeighbors(int neuron_index);
+
+    // Result of AddNeighbors.  Cleared on Reset().
+    // If you have not sorted the neurons yet, you can convert this back to
+    // the model neuron index via NeuronOrderInverse[neuron_index].
+    std::vector<uint16_t> Neighbors;
 
 protected:
     uint8_t* Buffer = nullptr;
+
+    // Has a neuron been seen?  Either provided by AddNeighbors() or returned from it.
+    // This is reset on Reset().
+    std::vector<bool> SeenNeurons;
 };
