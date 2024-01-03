@@ -8,7 +8,7 @@ CoactivationPredictor::~CoactivationPredictor()
     SIMDSafeFree(Buffer);
 }
 
-bool CoactivationPredictor::ReadFile(const std::string& file_path)
+bool CoactivationPredictor::ReadFile(const std::string& file_path, bool calculate_inverse)
 {
     // FIXME: Read file into Buffer and pointers
 
