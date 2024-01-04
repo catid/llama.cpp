@@ -799,7 +799,7 @@ static std::vector<int> ClusterSortIndices(Correlation& corr, const ClusterSortI
     return sorted_indices;
 }
 
-static void GenerateNeuronHistogram(CorrelationMatrix& m)
+static void GenerateNeuronHistogram(CorrelationMatrix& m, const std::string& filename)
 {
     const int width = m.MatrixWidth;
 
@@ -862,12 +862,7 @@ static void GenerateNeuronHistogram(CorrelationMatrix& m)
     // Write histogram
 
     cv::Mat hist_image(hist_h, hist_w, CV_8UC1, (void*)histogram_image);
-
-    std::string hist_filename = "histogram_block_";
-    hist_filename += std::to_string(m.BlockNumber);
-    hist_filename += ".png";
-
-    cv::imwrite(hist_filename, hist_image);
+    cv::imwrite(filename, hist_image);
 }
 
 static double ScoreOrder(int width, const int* indices, Correlation& corr, int diag_dist_score = 32)
@@ -904,15 +899,13 @@ static double ScoreOrder(int width, const int* indices, Correlation& corr, int d
     return score;
 }
 
-static void GenerateHeatmap(CorrelationMatrix& m)
+static void StudyCoactivations(CorrelationMatrix& m, Correlation& corr, std::vector<int>& indices)
 {
     const int width = m.MatrixWidth;
 
-    Correlation corr;
     corr.Calculate(m);
 
-    std::vector<int> indices(width);
-
+    indices.resize(width);
     for (int i = 0; i < width; ++i) {
         indices[i] = i;
     }
@@ -925,15 +918,13 @@ static void GenerateHeatmap(CorrelationMatrix& m)
 
     indices = ClusterSortIndices(corr);
 
-#if 0
-    SAParams sa_params;
-    sa_params.max_move = m.MatrixWidth / 8;
-    sa_params.max_epochs = 100;
-    SimulatedAnnealing(indices, corr, sa_params);
-#endif
-
     double score = ScoreOrder(width, indices.data(), corr);
     cout << "Final score=" << score << endl;
+}
+
+static void GenerateHeatmap(Correlation& corr, std::vector<int>& indices, const std::string& filename)
+{
+    const int width = corr.Width;
 
     // Generate heatmap
 
@@ -986,12 +977,7 @@ static void GenerateHeatmap(CorrelationMatrix& m)
     // Store as a PNG image
 
     cv::Mat heatmap_image(width, width, CV_8UC3, (void*)heatmap);
-
-    std::string heatmap_filename = "heatmap_block_";
-    heatmap_filename += std::to_string(m.BlockNumber);
-    heatmap_filename += ".png";
-
-    cv::imwrite(heatmap_filename, heatmap_image);
+    cv::imwrite(filename, heatmap_image);
 }
 
 int main(int argc, char* argv[])
@@ -1011,8 +997,21 @@ int main(int argc, char* argv[])
 
     cout << "Studying " << m_file << " (Block=" << m.BlockNumber << ", Width=" << m.MatrixWidth << ")" << endl;
 
-    GenerateNeuronHistogram(m);
-    GenerateHeatmap(m);
+    Correlation corr;
+    std::vector<int> indices;
+    StudyCoactivations(m, corr, indices);
+
+    std::string hist_filename = "histogram_block_";
+    hist_filename += std::to_string(m.BlockNumber);
+    hist_filename += ".png";
+
+    GenerateNeuronHistogram(m, hist_filename);
+
+    std::string heatmap_filename = "heatmap_block_";
+    heatmap_filename += std::to_string(m.BlockNumber);
+    heatmap_filename += ".png";
+
+    GenerateHeatmap(corr, indices, heatmap_filename);
 
     return 0;
 }
