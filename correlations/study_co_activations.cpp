@@ -899,8 +899,19 @@ static double ScoreOrder(int width, const int* indices, Correlation& corr, int d
     return score;
 }
 
-static void StudyCoactivations(CorrelationMatrix& m, Correlation& corr, std::vector<int>& indices)
+static void StudyCoactivations(
+    CorrelationMatrix& m,
+    Correlation& corr,
+    std::vector<int>& indices,
+    std::vector<uint8_t>& above_count,
+    std::vector<uint8_t>& below_count,
+    int neighbor_limit,
+    float r_thresh)
 {
+    if (neighbor_limit > 255) {
+        throw std::runtime_error("Neighbor limit too high");
+    }
+
     const int width = m.MatrixWidth;
 
     corr.Calculate(m);
@@ -920,6 +931,52 @@ static void StudyCoactivations(CorrelationMatrix& m, Correlation& corr, std::vec
 
     double score = ScoreOrder(width, indices.data(), corr);
     cout << "Final score=" << score << endl;
+
+    above_count.resize(width);
+    below_count.resize(width);
+
+    for (int i = 0; i < width; ++i)
+    {
+        const int neuron_i = indices[i];
+
+        int below = 0;
+
+        for (int j = 1; j < neighbor_limit; ++j)
+        {
+            const int neighbor_j = i - j;
+            if (neighbor_j < 0) {
+                break;
+            }
+            const int neighbor_neuron_j = indices[neighbor_j];
+
+            const float r = corr.Get(neuron_i, neighbor_neuron_j);
+            if (r > r_thresh) {
+                below = j;
+            }
+        }
+
+        below_count[i] = static_cast<uint8_t>( below );
+
+        int above = 0;
+
+        for (int j = 1; j < neighbor_limit; ++j)
+        {
+            const int neighbor_j = i + j;
+            if (neighbor_j >= width) {
+                break;
+            }
+            const int neighbor_neuron_j = indices[neighbor_j];
+
+            const float r = corr.Get(neuron_i, neighbor_neuron_j);
+            if (r > r_thresh) {
+                above = j;
+            }
+        }
+
+        above_count[i] = static_cast<uint8_t>( above );
+
+        cout << "Neuron " << i << " : below=" << below << " above=" << above << endl;
+    }
 }
 
 static void GenerateHeatmap(Correlation& corr, std::vector<int>& indices, const std::string& filename)
@@ -999,7 +1056,13 @@ int main(int argc, char* argv[])
 
     Correlation corr;
     std::vector<int> indices;
-    StudyCoactivations(m, corr, indices);
+    std::vector<uint8_t> above_count;
+    std::vector<uint8_t> below_count;
+
+    const int neighbor_limit = 64;
+    const float r_thresh = 0.05;
+
+    StudyCoactivations(m, corr, indices, above_count, below_count, neighbor_limit, r_thresh);
 
     std::string hist_filename = "histogram_block_";
     hist_filename += std::to_string(m.BlockNumber);
